@@ -3,7 +3,7 @@ CD5220 Library Unit Tests
 
 Mock-based unit tests that validate library functionality without requiring
 actual hardware. These tests focus on parameter validation, state management,
-and error handling.
+window management, and error handling.
 """
 
 import pytest
@@ -31,6 +31,7 @@ class TestCD5220Unit:
         assert mock_display.warn_on_mode_transitions == True
         assert mock_display.default_delay == 0.05
         assert mock_display.bulk_multiplier == 2.0
+        assert mock_display.active_windows == {}
     
     def test_brightness_parameter_validation(self, mock_display):
         """Test brightness parameter validation."""
@@ -70,7 +71,7 @@ class TestCD5220Unit:
             mock_display.set_cursor_position(21, 1)
     
     def test_mode_state_tracking(self, mock_display):
-        """Test mode state tracking."""
+        """Test mode state tracking including new viewport mode."""
         # Start in normal mode
         assert mock_display.current_mode == DisplayMode.NORMAL
         
@@ -79,18 +80,71 @@ class TestCD5220Unit:
         assert mock_display.current_mode == DisplayMode.STRING
         
         # Transition to scroll mode
-        mock_display.scroll_upper_line("SCROLL TEST")
+        mock_display.scroll_marquee("SCROLL TEST")
         assert mock_display.current_mode == DisplayMode.SCROLL
         
         # Return to normal via clear
         mock_display.clear_display()
         assert mock_display.current_mode == DisplayMode.NORMAL
         
+        # Test viewport mode
+        mock_display.set_window(1, 5, 15)
+        mock_display.enter_viewport_mode()
+        assert mock_display.current_mode == DisplayMode.VIEWPORT
+        
         # Return to normal via cancel
-        mock_display.write_lower_line_string("TEST")
-        assert mock_display.current_mode == DisplayMode.STRING
         mock_display.cancel_current_line()
         assert mock_display.current_mode == DisplayMode.NORMAL
+    
+    def test_window_management(self, mock_display):
+        """Test window management functionality."""
+        # Test valid window setting
+        mock_display.set_window(1, 5, 15)
+        assert 1 in mock_display.active_windows
+        assert mock_display.active_windows[1] == (5, 15)
+        
+        mock_display.set_window(2, 3, 18)
+        assert 2 in mock_display.active_windows
+        assert mock_display.active_windows[2] == (3, 18)
+        
+        # Test window parameter validation
+        with pytest.raises(CD5220DisplayError, match="Line must be 1 or 2"):
+            mock_display.set_window(3, 5, 15)
+        
+        with pytest.raises(CD5220DisplayError, match="Invalid window range"):
+            mock_display.set_window(1, 15, 5)  # start > end
+        
+        with pytest.raises(CD5220DisplayError, match="Invalid window range"):
+            mock_display.set_window(1, 0, 10)  # start < 1
+        
+        with pytest.raises(CD5220DisplayError, match="Invalid window range"):
+            mock_display.set_window(1, 5, 25)  # end > 20
+        
+        # Test window clearing
+        mock_display.clear_window(1)
+        assert 1 not in mock_display.active_windows
+        assert 2 in mock_display.active_windows  # Other window should remain
+        
+        mock_display.clear_all_windows()
+        assert mock_display.active_windows == {}
+    
+    def test_viewport_mode_requirements(self, mock_display):
+        """Test viewport mode entry requirements."""
+        # Should fail without windows
+        with pytest.raises(CD5220DisplayError, match="No windows configured"):
+            mock_display.enter_viewport_mode()
+        
+        # Should work with windows
+        mock_display.set_window(1, 5, 15)
+        mock_display.enter_viewport_mode()
+        assert mock_display.current_mode == DisplayMode.VIEWPORT
+        
+        # Test viewport writing requirements
+        with pytest.raises(CD5220DisplayError, match="No window configured for line 2"):
+            mock_display.write_viewport(2, "TEST")
+        
+        # Should work for configured line
+        mock_display.write_viewport(1, "TEST")  # Should not raise
     
     def test_auto_clear_mode_transitions(self, mock_display):
         """Test automatic mode transitions."""
@@ -104,6 +158,16 @@ class TestCD5220Unit:
         # Normal mode operation should auto-clear
         mock_display.set_brightness(3)
         assert mock_display.current_mode == DisplayMode.NORMAL
+        
+        # Test viewport mode auto-clear
+        mock_display.set_window(1, 5, 15)
+        mock_display.enter_viewport_mode()
+        assert mock_display.current_mode == DisplayMode.VIEWPORT
+        
+        # Should auto-clear from viewport mode too
+        mock_display.cursor_on()
+        assert mock_display.current_mode == DisplayMode.NORMAL
+        assert mock_display.active_windows == {}  # Windows should be cleared
     
     def test_manual_mode_control_disabled(self, mock_display):
         """Test manual mode control when auto-clear is disabled."""
@@ -143,7 +207,7 @@ class TestCD5220Unit:
         """Test display info reporting."""
         info = mock_display.get_display_info()
         
-        expected_keys = ['mode', 'auto_clear', 'warn_transitions', 'default_delay', 'bulk_multiplier']
+        expected_keys = ['mode', 'auto_clear', 'warn_transitions', 'default_delay', 'bulk_multiplier', 'active_windows']
         for key in expected_keys:
             assert key in info
         
@@ -152,16 +216,23 @@ class TestCD5220Unit:
         assert isinstance(info['warn_transitions'], bool)
         assert isinstance(info['default_delay'], float)
         assert isinstance(info['bulk_multiplier'], float)
+        assert isinstance(info['active_windows'], dict)
     
     def test_restore_defaults_method(self, mock_display):
-        """Test restore_defaults method."""
-        # Change state
+        """Test restore_defaults method with correct mode expectations."""
+        # Change state - write_upper_line_string sets mode to STRING
         mock_display.write_upper_line_string("TEST")
         assert mock_display.current_mode == DisplayMode.STRING
         
-        # Restore defaults
+        # set_window requires normal mode, so it auto-clears and mode becomes NORMAL
+        mock_display.set_window(1, 5, 15)
+        assert mock_display.current_mode == DisplayMode.NORMAL  # Mode is now NORMAL due to auto-clear
+        assert mock_display.active_windows != {}  # But windows are set
+        
+        # Restore defaults should clear everything
         mock_display.restore_defaults()
         assert mock_display.current_mode == DisplayMode.NORMAL
+        assert mock_display.active_windows == {}
     
     def test_configurable_timing(self, mock_display):
         """Test configurable timing system."""
@@ -202,6 +273,18 @@ class TestCD5220Unit:
         mock_display.clear_display()
         mock_display.write_both_lines("LEGACY 1", "LEGACY 2")
         assert mock_display.current_mode == DisplayMode.STRING
+        
+        # Test legacy scroll method
+        mock_display.clear_display()
+        mock_display.scroll_upper_line("LEGACY SCROLL")
+        assert mock_display.current_mode == DisplayMode.SCROLL
+    
+    def test_convenience_methods(self, mock_display):
+        """Test convenience methods including viewport demo."""
+        # Test create_viewport_demo method - this should work without error
+        mock_display.create_viewport_demo(1, 5, 15, "TEST", 0.1)
+        assert mock_display.current_mode == DisplayMode.VIEWPORT
+        assert 1 in mock_display.active_windows
     
     def test_context_manager(self):
         """Test context manager functionality."""

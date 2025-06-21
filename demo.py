@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """
-CD5220 VFD Display Comprehensive Demo with Smart Mode Management
+CD5220 VFD Display Comprehensive Demo with Two Scrolling Paradigms
 
-Demonstrates all documented modes and the smart mode management system:
+Demonstrates all documented modes and scrolling paradigms:
 - Normal Mode: Full cursor control and ESC commands  
 - String Mode: Fast line writing (ESC Q A/B)
-- Scroll Mode: Continuous scrolling (ESC Q D/C)
+- Continuous Scrolling (Marquee): Automatic movement at ~1Hz (ESC Q D - upper line only)
+- Viewport Scrolling (Window-constrained): Overflow within defined boundaries (ESC W + ESC DC3)
 - Smart transitions: Automatic mode management
 
 Hardware Requirements:
@@ -13,10 +14,10 @@ Hardware Requirements:
 - RS232 connection at 9600 baud
 - Display configured for PTC mode (DIP switches)
 
-Timing Considerations:
-- Scroll refresh rate: ~1Hz (display-dependent)
-- Mode transitions require settling time
-- Visual confirmation requires adequate pause
+Key Discovery:
+Two fundamentally different scrolling paradigms exist:
+1. Continuous Marquee: Time-based automatic movement
+2. Viewport Overflow: Event-triggered scrolling within window boundaries
 """
 
 import time
@@ -43,7 +44,8 @@ class CD5220DemoFixture:
         self.BRIGHTNESS_PAUSE = 2.0 * delay_multiplier
         self.MODE_TRANSITION_DELAY = 0.5 * delay_multiplier
         self.VISUAL_CONFIRMATION_TIME = 2.5 * delay_multiplier
-        self.SCROLL_OBSERVATION_TIME = 8.0 * delay_multiplier  # Reduced from 12s
+        self.SCROLL_OBSERVATION_TIME = 8.0 * delay_multiplier
+        self.VIEWPORT_DEMO_TIME = 6.0 * delay_multiplier
         self.STEP_PAUSE = 1.0 * delay_multiplier
         
     def setup_demo(self, title: str, subtitle: str = "STARTING...") -> None:
@@ -130,24 +132,22 @@ def demo_smart_mode_management(display: CD5220, fixture: CD5220DemoFixture):
 def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate all normal mode functionality with proper content for brightness observation."""
     
-    # Test brightness control with content visible
+    # Test brightness control with content visible - start from level 1, rewrite both lines
     fixture.show_banner("BRIGHTNESS DEMO", "OBSERVE CHANGES")
     
-    # Establish baseline content for brightness observation
-    display.clear_display()
-    display.write_positioned("BRIGHTNESS TEST", 1, 1)
-    display.write_positioned("LEVEL: 4/4 (MAX)", 1, 2)
-    fixture.pause_for_observation("Brightness level 4", fixture.BRIGHTNESS_PAUSE)
+    # Start with brightness level 1 for better demonstration
+    display.set_brightness(1)
+    display.write_both_lines_string("BRIGHTNESS TEST", "LEVEL: 1/4 (MIN)")
+    fixture.pause_for_observation("Brightness level 1", fixture.BRIGHTNESS_PAUSE)
     
-    for level in range(3, 0, -1):  # Count down from 3 to 1
+    # Progress through brightness levels, rewriting both lines completely
+    for level in range(2, 5):  # Count up from 2 to 4
         display.set_brightness(level)
-        display.write_positioned(f"LEVEL: {level}/4", 7, 2)  # Update just the level number
+        level_text = f"LEVEL: {level}/4" + (" (MAX)" if level == 4 else "")
+        display.write_both_lines_string("BRIGHTNESS TEST", level_text)
         fixture.pause_for_observation(f"Brightness level {level}", fixture.BRIGHTNESS_PAUSE)
     
-    # Return to max brightness for remaining demos
-    display.set_brightness(4)
-    display.write_positioned("LEVEL: 4/4 (MAX)", 7, 2)
-    fixture.pause_for_observation("Brightness restored", fixture.STEP_PAUSE)
+    fixture.pause_for_observation("Brightness demonstration complete", fixture.STEP_PAUSE)
     
     # Test cursor functionality  
     fixture.show_banner("CURSOR DEMO", "POSITIONING")
@@ -173,6 +173,7 @@ def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     # Test display modes with actual scrolling behavior
     fixture.show_banner("DISPLAY MODES", "TESTING")
     
+    # Ensure we start in overwrite mode
     display.set_overwrite_mode()
     display.write_positioned("OVERWRITE MODE", 1, 1)
     display.write_positioned("ACTIVE NOW", 1, 2)
@@ -182,30 +183,20 @@ def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     display.set_vertical_scroll_mode()
     display.clear_display()
     display.write_positioned("VERTICAL SCROLL", 1, 1)
-    display.write_positioned("TYPE MORE TO SCROLL", 1, 2)
+    display.write_positioned("WRITING TO OVERFLOW", 1, 2)
     fixture.pause_for_observation("Vertical scroll mode setup", fixture.STEP_PAUSE)
     
-    # Force vertical scrolling by writing beyond capacity
-    display.set_cursor_position(21, 2)  # This will wrap and trigger scroll
-    for i in range(5):
-        display.write_at_cursor(f"LINE{i+3} ")
-        time.sleep(0.8 * fixture.delay_multiplier)
-    fixture.pause_for_observation("Vertical scrolling in action", fixture.VISUAL_CONFIRMATION_TIME)
-    
-    # Demonstrate horizontal scroll mode with actual scrolling
-    display.set_horizontal_scroll_mode()
-    display.clear_display()
-    display.write_positioned("HORIZONTAL MODE", 1, 1)
+    # Force vertical scrolling by writing multiple lines that overflow
     display.set_cursor_position(1, 2)
-    # Write a long line to trigger horizontal scrolling
-    long_line = "THIS IS A VERY LONG LINE THAT WILL SCROLL HORIZONTALLY AS IT EXCEEDS 20 CHARS"
-    for char in long_line:
+    overflow_text = "LINE3 CONTENT FORCES SCROLL UP TO DEMONSTRATE VERTICAL SCROLL MODE BEHAVIOR"
+    for char in overflow_text:
         display.write_at_cursor(char)
-        time.sleep(0.1 * fixture.delay_multiplier)
-    fixture.pause_for_observation("Horizontal scrolling in action", fixture.VISUAL_CONFIRMATION_TIME)
+        time.sleep(0.05 * fixture.delay_multiplier)  # Slow enough to see scrolling
+    fixture.pause_for_observation("Vertical scrolling in action", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Explicitly restore overwrite mode before exit
     display.set_overwrite_mode()
+    fixture.pause_for_observation("Overwrite mode restored", fixture.STEP_PAUSE)
 
 def demo_string_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate string mode functionality."""
@@ -234,45 +225,145 @@ def demo_string_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     display.write_lower_line_string("PADDED")
     fixture.pause_for_observation("Text padding", fixture.VISUAL_CONFIRMATION_TIME)
 
-def demo_scroll_mode_features(display: CD5220, fixture: CD5220DemoFixture):
-    """Demonstrate scroll mode functionality with proper timing and isolation."""
+def demo_continuous_scrolling_marquee(display: CD5220, fixture: CD5220DemoFixture):
+    """Demonstrate continuous marquee scrolling - the classic scrolling paradigm."""
     
-    # Test upper line scrolling with clear setup
-    fixture.show_banner("SCROLL DEMO", "UPPER LINE")
+    # Test continuous marquee scrolling with clear setup
+    fixture.show_banner("MARQUEE SCROLLING", "CONTINUOUS MOVEMENT")
     display.clear_display()
     display.write_positioned("STATIC ON LINE 2", 1, 2)  # Static text on line 2
-    fixture.pause_for_observation("Setup for upper scroll", fixture.STEP_PAUSE)
+    fixture.pause_for_observation("Setup for marquee scroll", fixture.STEP_PAUSE)
     
-    scroll_text = "CONTINUOUS SCROLLING TEXT ON UPPER LINE - OBSERVE MULTIPLE CYCLES"
-    display.scroll_upper_line(scroll_text)
+    scroll_text = "CONTINUOUS MARQUEE SCROLLING AT 1HZ - AUTOMATIC MOVEMENT UNTIL STOPPED"
+    display.scroll_marquee(scroll_text)
     logger.info(f"Current mode: {display.current_mode.value}")
     
-    # Reduced observation time but still enough to see multiple cycles
+    # Observation time for marquee scrolling
     observation_time = fixture.SCROLL_OBSERVATION_TIME
-    logger.info(f"Observing upper scroll for {observation_time:.1f} seconds")
+    logger.info(f"Observing marquee scroll for {observation_time:.1f} seconds")
     time.sleep(observation_time)
     
-    # Test lower line scrolling with proper isolation
-    logger.info("Setting up lower line scroll test...")
-    display.clear_display()  # Clear everything for clean test
-    display.write_positioned("STATIC ON LINE 1", 1, 1)  # Static text on line 1
-    fixture.pause_for_observation("Setup for lower scroll", fixture.STEP_PAUSE)
+    # Demonstrate hardware limitation - no lower line marquee support
+    logger.info("CD5220 hardware only supports upper line marquee scrolling")
+    fixture.show_banner("HARDWARE LIMIT", "UPPER MARQUEE ONLY", duration=3.0)
     
-    # Now start lower scroll - this should be clearly visible
-    lower_scroll_text = "LOWER LINE SCROLLING - NOTICE HOW THIS STOPS UPPER SCROLL AND STARTS LOWER"
-    display.scroll_lower_line(lower_scroll_text)
-    logger.info("Lower line scroll started - should be visible now")
-    time.sleep(observation_time * 0.8)  # Slightly shorter for variety
+    # Show alternative: string mode for lower line updates
+    fixture.show_banner("ALTERNATIVE", "STRING MODE LOWER")
+    display.cancel_current_line()  # Exit scroll mode cleanly
     
-    # Demonstrate cancel_current_line() instead of clear_display()
-    logger.info("Stopping scroll with cancel_current_line()")
-    display.cancel_current_line()
-    logger.info(f"Mode after cancel: {display.current_mode.value}")
+    # Demonstrate string mode for lower line (ESC Q B)
+    display.write_positioned("STATIC UPPER LINE", 1, 1)
+    for i in range(5):
+        display.write_lower_line_string(f"LOWER UPDATE #{i+1}")
+        time.sleep(0.8 * fixture.delay_multiplier)
     
-    # Show that display content is preserved (unlike clear_display)
-    display.write_positioned("CANCELLED, NOT", 1, 1)
+    fixture.pause_for_observation("String mode lower line updates", fixture.VISUAL_CONFIRMATION_TIME)
+
+def demo_viewport_overflow_scrolling(display: CD5220, fixture: CD5220DemoFixture):
+    """Demonstrate window-constrained viewport overflow scrolling - the newly discovered paradigm."""
+    
+    # Introduction to viewport concept
+    fixture.show_banner("VIEWPORT SCROLLING", "WINDOW CONSTRAINED")
+    fixture.show_banner("ESC W + ESC DC3", "OVERFLOW HANDLING", duration=3.0)
+    
+    # Test 1: Basic window setup and overflow
+    fixture.show_banner("TEST 1: BASIC", "WINDOW OVERFLOW")
+    display.clear_display()
+    
+    # Set up static context FIRST, before entering viewport mode
+    display.write_positioned("1234", 1, 1)      # Before window
+    display.write_positioned("67890", 16, 1)    # After window
+    display.write_positioned("WINDOW: COLS 5-15", 1, 2)
+    
+    # NOW set window and enter viewport mode
+    display.set_window(1, 5, 15)
+    display.enter_viewport_mode()
+    
+    # Demonstrate overflow scrolling character by character
+    test_text = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for i in range(1, len(test_text) + 1):
+        display.write_viewport(1, test_text[:i])
+        time.sleep(0.3 * fixture.delay_multiplier)
+        if i > 20:  # Stop after sufficient demonstration
+            break
+    
+    fixture.pause_for_observation("Viewport overflow scrolling", fixture.VISUAL_CONFIRMATION_TIME)
+    
+    # Test 2: Dual windows on both lines
+    fixture.show_banner("TEST 2: DUAL", "BOTH LINES")
+    display.clear_display()
+    
+    # Set up static markers FIRST
+    display.write_positioned("12", 1, 1)        # Before line 1 window
+    display.write_positioned("34567", 1, 2)     # Before line 2 window
+    display.write_positioned("90", 19, 2)       # After line 2 window
+    
+    # NOW set different windows on both lines
+    display.set_window(1, 3, 12)   # Line 1: columns 3-12 (10 chars)
+    display.set_window(2, 8, 18)   # Line 2: columns 8-18 (11 chars)
+    display.enter_viewport_mode()
+    
+    # Demonstrate both viewports
+    display.write_viewport(1, "VIEWPORT ONE TEXT OVERFLOW")
+    time.sleep(2 * fixture.delay_multiplier)
+    
+    display.write_viewport(2, "VIEWPORT TWO DIFFERENT WINDOW")
+    fixture.pause_for_observation("Dual viewport demonstration", fixture.VISUAL_CONFIRMATION_TIME)
+    
+    # Test 3: Window management
+    fixture.show_banner("TEST 3: WINDOW", "MANAGEMENT")
+    display.clear_display()
+    
+    # Show window info
+    windows = display.active_windows
+    window_info = f"WIN: {len(windows)} ACTIVE"
+    display.write_positioned(window_info, 1, 1)
+    display.write_positioned(f"L1:{windows.get(1,'NONE')}", 1, 2)
+    fixture.pause_for_observation("Window status", fixture.VISUAL_CONFIRMATION_TIME)
+    
+    # Clear windows
+    display.clear_all_windows()
+    display.write_positioned("ALL WINDOWS", 1, 1)
     display.write_positioned("CLEARED", 1, 2)
-    fixture.pause_for_observation("Cancel vs clear behavior", fixture.VISUAL_CONFIRMATION_TIME)
+    fixture.pause_for_observation("Windows cleared", fixture.VISUAL_CONFIRMATION_TIME)
+
+def demo_scrolling_paradigm_comparison(display: CD5220, fixture: CD5220DemoFixture):
+    """Compare the two scrolling paradigms side by side."""
+    
+    fixture.show_banner("PARADIGM COMPARE", "TWO SCROLL TYPES")
+    
+    # Paradigm 1: Continuous Marquee
+    fixture.show_banner("PARADIGM 1", "CONTINUOUS MARQUEE")
+    display.clear_display()
+    display.write_positioned("TIME-BASED AUTO", 1, 2)
+    
+    display.scroll_marquee("MARQUEE: AUTOMATIC MOVEMENT AT 1HZ REFRESH RATE")
+    time.sleep(6 * fixture.delay_multiplier)
+    
+    # Paradigm 2: Viewport Overflow  
+    fixture.show_banner("PARADIGM 2", "VIEWPORT OVERFLOW")
+    display.clear_display()
+    
+    # Set up static context FIRST
+    display.write_positioned("12345", 1, 1)     # Before window
+    display.write_positioned("78901", 17, 1)    # After window
+    display.write_positioned("EVENT-TRIGGERED", 1, 2)
+    
+    # NOW enter viewport mode
+    display.set_window(1, 6, 16)  # 11-character window
+    display.enter_viewport_mode()
+    
+    # Show overflow behavior
+    overflow_demo = "VIEWPORT OVERFLOW WITHIN WINDOW BOUNDARIES"
+    for i in range(5, len(overflow_demo) + 1, 3):
+        display.write_viewport(1, overflow_demo[:i])
+        time.sleep(0.5 * fixture.delay_multiplier)
+    
+    fixture.pause_for_observation("Paradigm comparison complete", fixture.VISUAL_CONFIRMATION_TIME)
+    
+    # Summary
+    fixture.show_banner("TWO PARADIGMS", "DIFFERENT USES")
+    fixture.show_banner("MARQUEE: ANNOUNCE", "VIEWPORT: CONSTRAIN", duration=4.0)
 
 def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate different configuration options."""
@@ -318,7 +409,7 @@ def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
         logger.info("Restored original configuration")
 
 def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
-    """Demonstrate convenience methods."""
+    """Demonstrate convenience methods including viewport demos."""
     
     # Test display_message
     fixture.show_banner("CONVENIENCE", "METHODS")
@@ -327,6 +418,18 @@ def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
     
     display.display_message("SHORTER MESSAGE IN NORMAL MODE", 
                           duration=fixture.VISUAL_CONFIRMATION_TIME, mode="normal")
+    
+    # Test viewport demo convenience method
+    fixture.show_banner("VIEWPORT DEMO", "CONVENIENCE METHOD")
+    display.clear_display()
+    
+    # Set up static context FIRST
+    display.write_positioned("DEMO: COLS 7-17", 1, 2)
+    
+    # Use convenience method (which handles viewport setup internally)
+    display.create_viewport_demo(1, 7, 17, "CONVENIENCE METHOD FOR VIEWPORT DEMONSTRATION", 0.3)
+    
+    fixture.pause_for_observation("Viewport convenience demo", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test rapid updates (staying in string mode)
     fixture.show_banner("RAPID UPDATES", "STRING MODE")
@@ -343,15 +446,19 @@ def run_comprehensive_demo(display: CD5220, config):
     fixture = CD5220DemoFixture(display, config.delay_multiplier)
     
     # Welcome message
-    display.display_message("CD5220 SMART MODE DEMO - STARTING ALL DEMOS", 
+    display.display_message("CD5220 TWO SCROLLING PARADIGMS DEMO - STARTING", 
                           duration=3 * config.delay_multiplier, mode="string")
     
     # Demo suites based on CLI selection
     demo_suites = {
         'modes': [
             (demo_normal_mode_features, "NORMAL MODE"),
-            (demo_string_mode_features, "STRING MODE"),
-            (demo_scroll_mode_features, "SCROLL MODE")
+            (demo_string_mode_features, "STRING MODE")
+        ],
+        'scrolling': [
+            (demo_continuous_scrolling_marquee, "MARQUEE SCROLL"),
+            (demo_viewport_overflow_scrolling, "VIEWPORT SCROLL"),
+            (demo_scrolling_paradigm_comparison, "PARADIGM COMPARE")
         ],
         'smart': [
             (demo_smart_mode_management, "SMART MGMT")
@@ -387,21 +494,21 @@ def run_comprehensive_demo(display: CD5220, config):
     display.write_positioned("COMPLETED!", 1, 2)
     time.sleep(2 * config.delay_multiplier)
     
-    display.write_both_lines_string("SMART MODE DEMO", "FINISHED!")
+    display.write_both_lines_string("TWO PARADIGMS", "DEMONSTRATED!")
     time.sleep(2 * config.delay_multiplier)
     
     logger.info("=== COMPREHENSIVE DEMO COMPLETED ===")
 
 def main():
     """Main demo execution with CLI configuration."""
-    parser = argparse.ArgumentParser(description="CD5220 VFD Display Demo")
+    parser = argparse.ArgumentParser(description="CD5220 VFD Display Demo - Two Scrolling Paradigms")
     parser.add_argument('--port', default='/dev/tty.usbserial-A5XK3RJT', 
                        help='Serial port device')
     parser.add_argument('--baud', type=int, default=9600, 
                        help='Baud rate (default: 9600)')
     parser.add_argument('--fast', action='store_true', 
                        help='Reduce delays for experienced users')
-    parser.add_argument('--demo', choices=['all', 'modes', 'smart', 'config', 'convenience'], 
+    parser.add_argument('--demo', choices=['all', 'modes', 'scrolling', 'smart', 'config', 'convenience'], 
                        default='all', help='Run specific demo suite')
     parser.add_argument('--auto-advance', action='store_true',
                        help='Auto-advance between demos (no manual input)')
@@ -419,7 +526,7 @@ def main():
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
     
-    logger.info("CD5220 Smart Mode Management Demo Suite")
+    logger.info("CD5220 Two Scrolling Paradigms Demo Suite")
     logger.info(f"Port: {args.port} | Baud: {args.baud} | Demo: {args.demo}")
     logger.info(f"Fast mode: {args.fast} | Auto-advance: {args.auto_advance}")
     

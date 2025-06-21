@@ -1,10 +1,17 @@
 """
 CD5220 VFD Display Control Library with Smart Mode Management
 
-The CD5220 operates in distinct documented modes:
+The CD5220 operates in distinct documented modes with two scrolling paradigms:
+
+DISPLAY MODES:
 - NORMAL: Full cursor control, brightness, positioning (default)
 - STRING: Fast line writing via ESC Q A/B (incompatible with cursor commands)
-- SCROLL: Continuous scrolling via ESC Q D/C (incompatible with cursor commands)
+- SCROLL: Continuous marquee scrolling via ESC Q D (upper line only)
+- VIEWPORT: Window-constrained overflow scrolling via ESC W + ESC DC3
+
+SCROLLING PARADIGMS:
+1. Continuous Scrolling (Marquee): Automatic text movement at ~1Hz refresh rate
+2. Overflow Scrolling (Viewport): Text shifts within defined window boundaries when overflow occurs
 
 Smart mode management automatically handles transitions to maintain functionality
 while preserving user content when possible.
@@ -19,7 +26,7 @@ Hardware Specifications:
 import serial
 import time
 import logging
-from typing import Union, Optional, Dict, Any
+from typing import Union, Optional, Dict, Any, Tuple
 from enum import Enum
 
 logging.basicConfig(
@@ -33,7 +40,8 @@ class DisplayMode(Enum):
     """CD5220 operational modes as documented in manual."""
     NORMAL = "normal"          # Full cursor/ESC command support
     STRING = "string"          # ESC Q A/B mode - fast but limited to CLR/CAN
-    SCROLL = "scroll"          # ESC Q D/C mode - continuous scrolling
+    SCROLL = "scroll"          # ESC Q D mode - continuous marquee scrolling
+    VIEWPORT = "viewport"      # ESC W + ESC DC3 mode - window-constrained overflow
 
 class CD5220DisplayError(Exception):
     """Custom exception for CD5220 display errors."""
@@ -41,7 +49,7 @@ class CD5220DisplayError(Exception):
 
 class CD5220:
     """
-    CD5220 VFD Display Controller with Smart Mode Management
+    CD5220 VFD Display Controller with Smart Mode Management and Window Support
     
     OPERATIONAL MODES (as documented):
     
@@ -49,20 +57,42 @@ class CD5220:
        - Full cursor positioning and movement
        - Brightness control, display modes
        - Manual ASCII writing, all ESC commands
+       - Window management (ESC W commands)
     
     2. STRING MODE:
        - Fast line writing with ESC Q A (upper) / ESC Q B (lower)
        - Automatic padding and formatting
        - ONLY CLR/CAN commands work in this mode
     
-    3. SCROLL MODE:
-       - Continuous scrolling with ESC Q D/C
+    3. SCROLL MODE (Continuous Marquee):
+       - Continuous scrolling with ESC Q D (upper line only)
        - Scrolls until new command received
        - ONLY CLR/CAN commands work in this mode
+       - Hardware limitation: Upper line only
+    
+    4. VIEWPORT MODE (Window-Constrained Overflow):
+       - Window-constrained writing with ESC W + ESC DC3
+       - Text shifts left within window boundaries on overflow
+       - Requires window setup before mode activation
+       - Both lines supported with separate windows
+    
+    SCROLLING PARADIGMS:
+    
+    1. CONTINUOUS SCROLLING (Marquee-style):
+       - Automatic text movement at hardware refresh rate (~1Hz)
+       - Use scroll_marquee() method
+       - Time-based, continues until interrupted
+       - Upper line only (hardware constraint)
+    
+    2. OVERFLOW SCROLLING (Window-constrained):
+       - Text shifts within defined window boundaries
+       - Use set_window() + write_viewport() methods
+       - Event-triggered by text length exceeding window width
+       - Both lines supported
     
     SMART MODE MANAGEMENT:
     - Automatically clears display when needed for mode transitions
-    - Only clears when transitioning FROM STRING/SCROLL to NORMAL-only commands
+    - Only clears when transitioning FROM STRING/SCROLL/VIEWPORT to NORMAL-only commands
     - Preserves content when possible
     - Configurable behavior for advanced users
     
@@ -88,7 +118,7 @@ class CD5220:
     # Normal mode commands
     CMD_OVERWRITE_MODE = b'\x1B\x11'       # Overwrite mode
     CMD_VERTICAL_SCROLL = b'\x1B\x12'      # Vertical scroll mode
-    CMD_HORIZONTAL_SCROLL = b'\x1B\x13'    # Horizontal scroll mode
+    CMD_HORIZONTAL_SCROLL = b'\x1B\x13'    # Horizontal scroll mode (for viewport)
     CMD_CURSOR_ON = b'\x1B\x5F\x01'        # Cursor on
     CMD_CURSOR_OFF = b'\x1B\x5F\x00'       # Cursor off
     CMD_CURSOR_POSITION = b'\x1B\x6C'      # Set cursor position
@@ -105,9 +135,11 @@ class CD5220:
     CMD_STRING_UPPER = b'\x1B\x51\x41'     # ESC Q A - Upper line string mode
     CMD_STRING_LOWER = b'\x1B\x51\x42'     # ESC Q B - Lower line string mode
     
-    # Scroll mode commands (enter scroll mode)
-    CMD_SCROLL_UPPER = b'\x1B\x51\x44'     # ESC Q D - Upper line scroll mode
-    CMD_SCROLL_LOWER = b'\x1B\x51\x43'     # ESC Q C - Lower line scroll mode
+    # Scroll mode commands (enter scroll mode - upper line only)
+    CMD_SCROLL_MARQUEE = b'\x1B\x51\x44'   # ESC Q D - Upper line continuous scrolling
+    
+    # Window management commands (viewport mode)
+    CMD_WINDOW_SET = b'\x1B\x57'           # ESC W - Set/cancel window range
     
     # Font and display control
     CMD_INTERNATIONAL_FONT = b'\x1B\x66'   # International font selection
@@ -127,7 +159,7 @@ class CD5220:
             baudrate: Communication baud rate (default 9600)
             debug: Enable debug logging
             auto_clear_mode_transitions: Automatically clear when transitioning from 
-                                       STRING/SCROLL modes to NORMAL-only commands
+                                       STRING/SCROLL/VIEWPORT modes to NORMAL-only commands
             warn_on_mode_transitions: Log warnings when mode transitions occur
             command_delay: Default delay between commands (seconds)
             bulk_delay_multiplier: Multiplier for large payload delays
@@ -138,6 +170,7 @@ class CD5220:
         self.default_delay = command_delay
         self.bulk_multiplier = bulk_delay_multiplier
         self._current_mode = DisplayMode.NORMAL
+        self._active_windows = {}  # Track active window configurations
         
         if debug:
             logger.setLevel(logging.DEBUG)
@@ -200,6 +233,11 @@ class CD5220:
         """Get current display mode."""
         return self._current_mode
 
+    @property
+    def active_windows(self) -> Dict[int, Tuple[int, int]]:
+        """Get currently active window configurations."""
+        return self._active_windows.copy()
+
     def get_display_info(self) -> Dict[str, Any]:
         """Return current display state information for debugging."""
         return {
@@ -207,7 +245,8 @@ class CD5220:
             'auto_clear': self.auto_clear_mode_transitions,
             'warn_transitions': self.warn_on_mode_transitions,
             'default_delay': self.default_delay,
-            'bulk_multiplier': self.bulk_multiplier
+            'bulk_multiplier': self.bulk_multiplier,
+            'active_windows': self.active_windows
         }
 
     def _ensure_normal_mode(self, operation: str, force_clear: bool = False) -> bool:
@@ -235,18 +274,34 @@ class CD5220:
                            f"Use clear_display() first or enable auto_clear_mode_transitions.")
             raise CD5220DisplayError(f"{operation} requires normal mode. Use clear_display() first.")
 
+    def _send_cursor_position_raw(self, col: int, row: int) -> None:
+        """
+        Send cursor position command without mode checking.
+        Used internally for viewport operations.
+        """
+        cmd = self.CMD_CURSOR_POSITION + bytes([col, row])
+        self._send_command(cmd, 0.1, f"Raw cursor: ({col},{row})")
+
+    def _write_text_raw(self, text: str) -> None:
+        """
+        Send text without mode checking.
+        Used internally for viewport operations.
+        """
+        self._send_command(text.encode('ascii', 'ignore'), None, f"Raw write: '{text}'")
+
     # === MODE CONTROL ===
     
     def clear_display(self) -> None:
         """Clear display and return to normal mode."""
         self._send_command(self.CMD_CLEAR, 0.1, "Clear display")
         self._current_mode = DisplayMode.NORMAL
+        self._active_windows = {}  # Clear window state
 
     def cancel_current_line(self) -> None:
         """
         Cancel current line and return to normal mode.
         
-        Alternative to clear_display() that exits STRING/SCROLL modes
+        Alternative to clear_display() that exits STRING/SCROLL/VIEWPORT modes
         without clearing the entire display content.
         """
         self._send_command(self.CMD_CANCEL, 0.1, "Cancel current line")
@@ -257,6 +312,7 @@ class CD5220:
         self._send_command(self.CMD_INITIALIZE, 0.2, "Initialize display")
         self._send_command(self.CMD_CLEAR, 0.1, "Clear after init")
         self._current_mode = DisplayMode.NORMAL
+        self._active_windows = {}
 
     def restore_defaults(self) -> None:
         """
@@ -298,6 +354,9 @@ class CD5220:
         
         **Note**: This mode is persistent until overwrite_mode is restored.
         In horizontal scroll mode, characters beyond line width cause horizontal scrolling.
+        
+        **Important**: This is used internally for viewport mode. For overflow scrolling,
+        use set_window() + write_viewport() instead.
         """
         self._ensure_normal_mode("Horizontal scroll mode")
         self._send_command(self.CMD_HORIZONTAL_SCROLL, 0.1, "Set horizontal scroll mode")
@@ -346,8 +405,7 @@ class CD5220:
             raise CD5220DisplayError(f"Column must be 1-{self.DISPLAY_WIDTH}")
         
         self._ensure_normal_mode("Cursor positioning")
-        cmd = self.CMD_CURSOR_POSITION + bytes([col, row])
-        self._send_command(cmd, 0.1, f"Set cursor: ({col},{row})")
+        self._send_cursor_position_raw(col, row)
 
     def cursor_move_up(self) -> None:
         """Move cursor up (normal mode only)."""
@@ -382,7 +440,7 @@ class CD5220:
             text: Text to write (raw ASCII)
         """
         self._ensure_normal_mode("Cursor writing")
-        self._send_command(text.encode('ascii', 'ignore'), None, f"Write at cursor: '{text}'")
+        self._write_text_raw(text)
 
     def write_positioned(self, text: str, col: int, row: int) -> None:
         """
@@ -462,49 +520,138 @@ class CD5220:
         self.write_upper_line_string(upper)
         self.write_lower_line_string(lower)
 
-    # === SCROLL MODE METHODS ===
+    # === CONTINUOUS SCROLLING (MARQUEE) METHODS ===
     
-    def scroll_upper_line(self, text: str, observe_duration: float = None) -> None:
+    def scroll_marquee(self, text: str, observe_duration: float = None) -> None:
         """
-        Start continuous scrolling on upper line (ESC Q D).
+        Start continuous marquee scrolling on upper line (ESC Q D).
         
-        Text scrolls continuously until a new command is received.
-        Puts display in scroll mode.
+        Text scrolls continuously at hardware refresh rate (~1Hz) until a new 
+        command is received. This is classic "marquee" style scrolling.
+        
+        **Hardware Limitation**: Only upper line scrolling is supported by CD5220.
         
         Args:
             text: Text to scroll (can exceed 20 characters)
             observe_duration: Recommended viewing time (defaults to text length / refresh rate)
         """
-        cmd = self.CMD_SCROLL_UPPER + text.encode('ascii', 'ignore') + b'\x0D'
-        self._send_command(cmd, None, f"Scroll upper: '{text}'")
+        cmd = self.CMD_SCROLL_MARQUEE + text.encode('ascii', 'ignore') + b'\x0D'
+        self._send_command(cmd, None, f"Scroll marquee: '{text}'")
         self._current_mode = DisplayMode.SCROLL
         
         if observe_duration is None:
             # Calculate minimum observation time for text visibility
             observe_duration = max(8.0, len(text) / self.SCROLL_REFRESH_RATE * 0.5)
         
-        logger.info(f"Scrolling for {observe_duration:.1f}s at ~{self.SCROLL_REFRESH_RATE}Hz")
+        logger.info(f"Marquee scrolling for {observe_duration:.1f}s at ~{self.SCROLL_REFRESH_RATE}Hz")
 
-    def scroll_lower_line(self, text: str, observe_duration: float = None) -> None:
+    # === WINDOW MANAGEMENT (VIEWPORT) METHODS ===
+    
+    def set_window(self, line: int, start_col: int, end_col: int) -> None:
         """
-        Start continuous scrolling on lower line (ESC Q C).
+        Set window range for overflow scrolling on specified line (normal mode only).
         
-        Text scrolls continuously until a new command is received.
-        Puts display in scroll mode.
+        Windows define constrained writing areas where text will shift left
+        when overflow occurs. Must be set before entering viewport mode.
         
         Args:
-            text: Text to scroll (can exceed 20 characters)
-            observe_duration: Recommended viewing time (defaults to text length / refresh rate)
+            line: Line number (1 or 2)
+            start_col: Starting column (1-20)
+            end_col: Ending column (start_col to 20)
+            
+        Raises:
+            CD5220DisplayError: If parameters are invalid
         """
-        cmd = self.CMD_SCROLL_LOWER + text.encode('ascii', 'ignore') + b'\x0D'
-        self._send_command(cmd, None, f"Scroll lower: '{text}'")
-        self._current_mode = DisplayMode.SCROLL
+        if line not in (1, 2):
+            raise CD5220DisplayError("Line must be 1 or 2")
+        if not 1 <= start_col <= end_col <= self.DISPLAY_WIDTH:
+            raise CD5220DisplayError(f"Invalid window range: start={start_col}, end={end_col}")
         
-        if observe_duration is None:
-            # Calculate minimum observation time for text visibility
-            observe_duration = max(8.0, len(text) / self.SCROLL_REFRESH_RATE * 0.5)
+        self._ensure_normal_mode("Window management")
         
-        logger.info(f"Scrolling for {observe_duration:.1f}s at ~{self.SCROLL_REFRESH_RATE}Hz")
+        # ESC W s x1 x2 y: s=1 (set), x1=start, x2=end, y=line
+        cmd = self.CMD_WINDOW_SET + bytes([1, start_col, end_col, line])
+        self._send_command(cmd, 0.1, f"Set window: line {line}, cols {start_col}-{end_col}")
+        
+        # Track active window
+        self._active_windows[line] = (start_col, end_col)
+
+    def clear_window(self, line: int) -> None:
+        """
+        Clear window range for specified line (normal mode only).
+        
+        Args:
+            line: Line number (1 or 2)
+        """
+        if line not in (1, 2):
+            raise CD5220DisplayError("Line must be 1 or 2")
+        
+        self._ensure_normal_mode("Window management")
+        
+        # ESC W s x1 x2 y: s=0 (cancel), other params can be zeros
+        cmd = self.CMD_WINDOW_SET + bytes([0, 0, 0, line])
+        self._send_command(cmd, 0.1, f"Clear window: line {line}")
+        
+        # Remove from tracking
+        if line in self._active_windows:
+            del self._active_windows[line]
+
+    def clear_all_windows(self) -> None:
+        """Clear all window ranges (normal mode only)."""
+        self._ensure_normal_mode("Window management")
+        
+        for line in [1, 2]:
+            if line in self._active_windows:
+                self.clear_window(line)
+
+    def enter_viewport_mode(self) -> None:
+        """
+        Enter viewport mode for window-constrained overflow scrolling.
+        
+        **Important**: Windows must be set using set_window() before calling this method.
+        
+        Raises:
+            CD5220DisplayError: If no windows are configured
+        """
+        if not self._active_windows:
+            raise CD5220DisplayError("No windows configured. Use set_window() first.")
+        
+        self._ensure_normal_mode("Viewport mode entry")
+        
+        # Enter horizontal scroll mode for viewport functionality
+        self.set_horizontal_scroll_mode()
+        self._current_mode = DisplayMode.VIEWPORT
+        
+        logger.info(f"Entered viewport mode with windows: {self._active_windows}")
+
+    def write_viewport(self, line: int, text: str) -> None:
+        """
+        Write text within viewport window with overflow scrolling.
+        
+        Text will shift left within the defined window boundaries when it exceeds
+        the window width. Requires viewport mode to be active.
+        
+        Args:
+            line: Line number (1 or 2)
+            text: Text to write (can exceed window width)
+            
+        Raises:
+            CD5220DisplayError: If line has no window or not in viewport mode
+        """
+        if self._current_mode != DisplayMode.VIEWPORT:
+            raise CD5220DisplayError("Must be in viewport mode. Use enter_viewport_mode() first.")
+        
+        if line not in self._active_windows:
+            raise CD5220DisplayError(f"No window configured for line {line}")
+        
+        start_col, end_col = self._active_windows[line]
+        
+        # Position cursor at window start and write text using raw commands
+        # to avoid triggering mode transitions
+        self._send_cursor_position_raw(start_col, line)
+        self._write_text_raw(text)
+        
+        logger.debug(f"Viewport write: line {line}, window {start_col}-{end_col}, text: '{text}'")
 
     # === FONT CONTROL ===
     
@@ -547,6 +694,27 @@ class CD5220:
         
         time.sleep(duration)
 
+    def create_viewport_demo(self, line: int, window_start: int, window_end: int, 
+                           demo_text: str, char_delay: float = 0.2) -> None:
+        """
+        Convenience method to demonstrate viewport overflow scrolling.
+        
+        Args:
+            line: Line number (1 or 2)
+            window_start: Window start column
+            window_end: Window end column  
+            demo_text: Text to demonstrate with
+            char_delay: Delay between character additions
+        """
+        # Setup viewport
+        self.set_window(line, window_start, window_end)
+        self.enter_viewport_mode()
+        
+        # Show text building up character by character
+        for i in range(1, len(demo_text) + 1):
+            self.write_viewport(line, demo_text[:i])
+            time.sleep(char_delay)
+
     # === LEGACY COMPATIBILITY METHODS ===
     
     def write_upper_line(self, text: str) -> None:
@@ -560,6 +728,12 @@ class CD5220:
     def write_both_lines(self, upper: str, lower: str) -> None:
         """Legacy method: Write to both lines using string mode."""
         self.write_both_lines_string(upper, lower)
+
+    # Legacy scroll method - now redirects to marquee
+    def scroll_upper_line(self, text: str, observe_duration: float = None) -> None:
+        """Legacy method: Use scroll_marquee() instead."""
+        logger.warning("scroll_upper_line() is deprecated. Use scroll_marquee() for continuous scrolling or viewport methods for overflow scrolling.")
+        self.scroll_marquee(text, observe_duration)
 
     def close(self) -> None:
         """Close serial connection."""
