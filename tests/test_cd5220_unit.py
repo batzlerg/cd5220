@@ -7,6 +7,7 @@ and error handling.
 """
 
 import pytest
+import serial
 import time
 from unittest.mock import Mock, patch, MagicMock
 from cd5220 import CD5220, DisplayMode, CD5220DisplayError

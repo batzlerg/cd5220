@@ -43,7 +43,7 @@ class CD5220DemoFixture:
         self.BRIGHTNESS_PAUSE = 2.0 * delay_multiplier
         self.MODE_TRANSITION_DELAY = 0.5 * delay_multiplier
         self.VISUAL_CONFIRMATION_TIME = 2.5 * delay_multiplier
-        self.SCROLL_OBSERVATION_TIME = 12.0 * delay_multiplier
+        self.SCROLL_OBSERVATION_TIME = 8.0 * delay_multiplier  # Reduced from 12s
         self.STEP_PAUSE = 1.0 * delay_multiplier
         
     def setup_demo(self, title: str, subtitle: str = "STARTING...") -> None:
@@ -170,7 +170,7 @@ def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     display.cursor_off()
     fixture.pause_for_observation("Cursor writing demo", fixture.VISUAL_CONFIRMATION_TIME)
     
-    # Test display modes with proper restoration
+    # Test display modes with actual scrolling behavior
     fixture.show_banner("DISPLAY MODES", "TESTING")
     
     display.set_overwrite_mode()
@@ -178,15 +178,31 @@ def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     display.write_positioned("ACTIVE NOW", 1, 2)
     fixture.pause_for_observation("Overwrite mode", fixture.VISUAL_CONFIRMATION_TIME)
     
+    # Demonstrate vertical scroll mode with actual scrolling
     display.set_vertical_scroll_mode()
+    display.clear_display()
     display.write_positioned("VERTICAL SCROLL", 1, 1)
-    display.write_positioned("MODE ACTIVE", 1, 2)
-    fixture.pause_for_observation("Vertical scroll mode", fixture.VISUAL_CONFIRMATION_TIME)
+    display.write_positioned("TYPE MORE TO SCROLL", 1, 2)
+    fixture.pause_for_observation("Vertical scroll mode setup", fixture.STEP_PAUSE)
     
+    # Force vertical scrolling by writing beyond capacity
+    display.set_cursor_position(21, 2)  # This will wrap and trigger scroll
+    for i in range(5):
+        display.write_at_cursor(f"LINE{i+3} ")
+        time.sleep(0.8 * fixture.delay_multiplier)
+    fixture.pause_for_observation("Vertical scrolling in action", fixture.VISUAL_CONFIRMATION_TIME)
+    
+    # Demonstrate horizontal scroll mode with actual scrolling
     display.set_horizontal_scroll_mode()
+    display.clear_display()
     display.write_positioned("HORIZONTAL MODE", 1, 1)
-    display.write_positioned("ACTIVE", 1, 2)
-    fixture.pause_for_observation("Horizontal scroll mode", fixture.VISUAL_CONFIRMATION_TIME)
+    display.set_cursor_position(1, 2)
+    # Write a long line to trigger horizontal scrolling
+    long_line = "THIS IS A VERY LONG LINE THAT WILL SCROLL HORIZONTALLY AS IT EXCEEDS 20 CHARS"
+    for char in long_line:
+        display.write_at_cursor(char)
+        time.sleep(0.1 * fixture.delay_multiplier)
+    fixture.pause_for_observation("Horizontal scrolling in action", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Explicitly restore overwrite mode before exit
     display.set_overwrite_mode()
@@ -219,25 +235,33 @@ def demo_string_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     fixture.pause_for_observation("Text padding", fixture.VISUAL_CONFIRMATION_TIME)
 
 def demo_scroll_mode_features(display: CD5220, fixture: CD5220DemoFixture):
-    """Demonstrate scroll mode functionality with proper timing."""
+    """Demonstrate scroll mode functionality with proper timing and isolation."""
     
-    # Test upper line scrolling with hardware-aware timing
+    # Test upper line scrolling with clear setup
     fixture.show_banner("SCROLL DEMO", "UPPER LINE")
     display.clear_display()
-    display.write_positioned("STATIC TEXT", 1, 2)  # Static text on line 2
+    display.write_positioned("STATIC ON LINE 2", 1, 2)  # Static text on line 2
+    fixture.pause_for_observation("Setup for upper scroll", fixture.STEP_PAUSE)
     
-    scroll_text = "CONTINUOUS SCROLLING TEXT ON UPPER LINE - OBSERVE MULTIPLE CYCLES - HARDWARE REFRESH ~1HZ"
+    scroll_text = "CONTINUOUS SCROLLING TEXT ON UPPER LINE - OBSERVE MULTIPLE CYCLES"
     display.scroll_upper_line(scroll_text)
     logger.info(f"Current mode: {display.current_mode.value}")
     
-    # Calculate appropriate observation time for the text length
-    observation_time = max(fixture.SCROLL_OBSERVATION_TIME, len(scroll_text) / display.SCROLL_REFRESH_RATE * 0.6)
-    logger.info(f"Observing scroll for {observation_time:.1f} seconds")
+    # Reduced observation time but still enough to see multiple cycles
+    observation_time = fixture.SCROLL_OBSERVATION_TIME
+    logger.info(f"Observing upper scroll for {observation_time:.1f} seconds")
     time.sleep(observation_time)
     
-    # Test lower line scrolling (stops upper scroll)
-    fixture.show_banner("LOWER SCROLL", "REPLACES UPPER", duration=1.0)
-    display.scroll_lower_line("LOWER LINE SCROLLING - NOTICE HOW THIS STOPS UPPER SCROLL AND STARTS LOWER")
+    # Test lower line scrolling with proper isolation
+    logger.info("Setting up lower line scroll test...")
+    display.clear_display()  # Clear everything for clean test
+    display.write_positioned("STATIC ON LINE 1", 1, 1)  # Static text on line 1
+    fixture.pause_for_observation("Setup for lower scroll", fixture.STEP_PAUSE)
+    
+    # Now start lower scroll - this should be clearly visible
+    lower_scroll_text = "LOWER LINE SCROLLING - NOTICE HOW THIS STOPS UPPER SCROLL AND STARTS LOWER"
+    display.scroll_lower_line(lower_scroll_text)
+    logger.info("Lower line scroll started - should be visible now")
     time.sleep(observation_time * 0.8)  # Slightly shorter for variety
     
     # Demonstrate cancel_current_line() instead of clear_display()
