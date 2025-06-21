@@ -46,7 +46,7 @@ from cd5220 import CD5220
 
 with CD5220('/dev/ttyUSB0') as display:
     # fast string writing
-    display.write_both_lines_string("Hello", "World!")
+    display.write_both_lines("Hello", "World!")
     
     # positioned text
     display.clear_display()
@@ -84,9 +84,9 @@ with CD5220('/dev/ttyUSB0') as display:
 ### POS display
 ```python
 with CD5220('/dev/ttyUSB0') as display:
-    display.write_both_lines_string("ITEM: COFFEE", "PRICE: $3.50")
+    display.write_both_lines("ITEM: COFFEE", "PRICE: $3.50")
     time.sleep(2)
-    display.write_lower_line_string("PRICE: $2.99")  # quick update
+    display.write_lower_line("PRICE: $2.99")  # quick update
 ```
 
 ## Testing

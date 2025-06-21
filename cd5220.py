@@ -42,7 +42,7 @@ class CD5220:
     
     Basic Usage:
         with CD5220('/dev/ttyUSB0') as display:
-            display.write_both_lines_string("Hello", "World")
+            display.write_both_lines("Hello", "World")
             display.scroll_marquee("Scrolling text...")
     
     Mode Management:
@@ -345,7 +345,7 @@ class CD5220:
 
     # === STRING MODE METHODS ===
     
-    def write_upper_line_string(self, text: str) -> None:
+    def write_upper_line(self, text: str) -> None:
         """
         Write to upper line using fast string mode (ESC Q A).
         
@@ -362,13 +362,8 @@ class CD5220:
         self._send_command(cmd, None, f"String upper: '{text}'")
         self._current_mode = DisplayMode.STRING
 
-    def write_lower_line_string(self, text: str) -> None:
-        """
-        Write to lower line using fast string mode (ESC Q B).
-        
-        Args:
-            text: Text to display (truncated to 20 chars if longer)
-        """
+    def write_lower_line(self, text: str) -> None:
+        """Write to lower line using fast string mode (ESC Q B)."""
         if len(text) > self.DISPLAY_WIDTH:
             text = text[:self.DISPLAY_WIDTH]
         padded_text = text.ljust(self.DISPLAY_WIDTH)
@@ -376,10 +371,10 @@ class CD5220:
         self._send_command(cmd, None, f"String lower: '{text}'")
         self._current_mode = DisplayMode.STRING
 
-    def write_both_lines_string(self, upper: str, lower: str) -> None:
+    def write_both_lines(self, upper: str, lower: str) -> None:
         """Write to both lines using string mode."""
-        self.write_upper_line_string(upper)
-        self.write_lower_line_string(lower)
+        self.write_upper_line(upper)
+        self.write_lower_line(lower)
 
     # === CONTINUOUS SCROLLING METHODS ===
     
@@ -429,7 +424,6 @@ class CD5220:
         cmd = self.CMD_WINDOW_SET + bytes([1, hw_start_col, hw_end_col, line])
         self._send_command(cmd, 0.1, f"Set window: line {line}, cols {start_col}-{end_col}")
         self._active_windows[line] = (start_col, end_col)  # Store API coordinates for consistency
-
 
     def clear_window(self, line: int) -> None:
         """Clear window range for specified line (normal mode only)."""
@@ -521,9 +515,9 @@ class CD5220:
         
         if mode == "string":
             if len(lines) >= 1:
-                self.write_upper_line_string(lines[0])
+                self.write_upper_line(lines[0])
             if len(lines) >= 2:
-                self.write_lower_line_string(lines[1])
+                self.write_lower_line(lines[1])
         else:  # normal mode
             self.clear_display()
             if len(lines) >= 1:
@@ -532,25 +526,6 @@ class CD5220:
                 self.write_positioned(lines[1], 1, 2)
         
         time.sleep(duration)
-
-    # === LEGACY COMPATIBILITY METHODS ===
-    
-    def write_upper_line(self, text: str) -> None:
-        """Legacy method: Write to upper line using string mode."""
-        self.write_upper_line_string(text)
-
-    def write_lower_line(self, text: str) -> None:
-        """Legacy method: Write to lower line using string mode."""
-        self.write_lower_line_string(text)
-
-    def write_both_lines(self, upper: str, lower: str) -> None:
-        """Legacy method: Write to both lines using string mode."""
-        self.write_both_lines_string(upper, lower)
-
-    def scroll_upper_line(self, text: str, observe_duration: float = None) -> None:
-        """Legacy method: Use scroll_marquee() instead."""
-        logger.warning("scroll_upper_line() is deprecated. Use scroll_marquee() instead.")
-        self.scroll_marquee(text, observe_duration)
 
     def close(self) -> None:
         """Close serial connection."""

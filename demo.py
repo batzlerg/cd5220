@@ -42,7 +42,7 @@ class CD5220DemoFixture:
         """Reset to known state and show demo title."""
         self.display.restore_defaults()
         title_truncated = title[:16] if len(title) > 16 else title
-        self.display.write_both_lines_string(f"DEMO: {title_truncated}", subtitle)
+        self.display.write_both_lines(f"DEMO: {title_truncated}", subtitle)
         time.sleep(self.VISUAL_CONFIRMATION_TIME)
         
     def teardown_demo(self) -> None:
@@ -54,7 +54,7 @@ class CD5220DemoFixture:
         """Show a banner message."""
         if duration is None:
             duration = self.VISUAL_CONFIRMATION_TIME
-        self.display.write_both_lines_string(upper, lower)
+        self.display.write_both_lines(upper, lower)
         time.sleep(duration)
         
     def pause_for_observation(self, description: str, duration: float = None) -> None:
@@ -64,16 +64,27 @@ class CD5220DemoFixture:
         logger.info(f"Observe: {description} (pausing {duration:.1f}s)")
         time.sleep(duration)
 
-def run_isolated_demo(display: CD5220, demo_func, title: str, fixture: CD5220DemoFixture):
-    """Run a single demo with proper isolation."""
-    logger.info(f"Starting demo: {title}")
-    fixture.setup_demo(title)
-    try:
-        demo_func(display, fixture)
-    finally:
-        fixture.teardown_demo()
-    logger.info(f"Completed demo: {title}")
+def isolated_demo(title: str):
+    """
+    Decorator that wraps an individual demo function with:
+    • CD5220DemoFixture creation
+    • automatic setup / teardown
+    • uniform logging
+    """
+    def decorator(fn):
+        def wrapped(display: CD5220, delay_multiplier: float):
+            fixture = CD5220DemoFixture(display, delay_multiplier)
+            logger.info(f"Starting demo: {title}")
+            fixture.setup_demo(title)
+            try:
+                fn(display, fixture)          # run user demo
+            finally:
+                fixture.teardown_demo()
+            logger.info(f"Completed demo: {title}")
+        return wrapped
+    return decorator
 
+@isolated_demo("NORMAL MODE")
 def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate normal mode functionality with proper state isolation."""
     
@@ -82,14 +93,14 @@ def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     
     # Start with brightness level 1 for maximum contrast demonstration
     display.set_brightness(1)
-    display.write_both_lines_string("BRIGHTNESS TEST", "LEVEL: 1/4 (MIN)")
+    display.write_both_lines("BRIGHTNESS TEST", "LEVEL: 1/4 (MIN)")
     fixture.pause_for_observation("Brightness level 1", fixture.BRIGHTNESS_PAUSE)
     
     # Progress through brightness levels
     for level in range(2, 5):
         display.set_brightness(level)
         level_text = f"LEVEL: {level}/4" + (" (MAX)" if level == 4 else "")
-        display.write_both_lines_string("BRIGHTNESS TEST", level_text)
+        display.write_both_lines("BRIGHTNESS TEST", level_text)
         fixture.pause_for_observation(f"Brightness level {level}", fixture.BRIGHTNESS_PAUSE)
     
     # Test cursor functionality  
@@ -114,30 +125,32 @@ def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     display.write_positioned("POSITIONED TEXT", 1, 2)
     fixture.pause_for_observation("Normal mode writing", fixture.VISUAL_CONFIRMATION_TIME)
 
+@isolated_demo("STRING MODE")
 def demo_string_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate string mode functionality with proper isolation."""
     
     # Test basic string writing
     fixture.show_banner("STRING MODE", "FAST WRITING")
-    display.write_upper_line_string("STRING MODE DEMO")
-    display.write_lower_line_string("FAST LINE WRITING")
+    display.write_upper_line("STRING MODE DEMO")
+    display.write_lower_line("FAST LINE WRITING")
     logger.info(f"Current mode: {display.current_mode.value}")
     fixture.pause_for_observation("String mode writing", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test both lines together
-    display.write_both_lines_string("BOTH LINES", "UPDATED TOGETHER")
+    display.write_both_lines("BOTH LINES", "UPDATED TOGETHER")
     fixture.pause_for_observation("Both lines updated", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test text handling (intentional truncation demo)
     fixture.show_banner("TEXT HANDLING", "TRUNCATION TEST")
-    display.write_upper_line_string("THIS IS A VERY LONG LINE THAT EXCEEDS TWENTY CHARACTERS")
-    display.write_lower_line_string("TRUNCATED TO 20")
+    display.write_upper_line("THIS IS A VERY LONG LINE THAT EXCEEDS TWENTY CHARACTERS")
+    display.write_lower_line("TRUNCATED TO 20")
     fixture.pause_for_observation("Long text truncation", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test automatic padding
-    display.write_both_lines_string("SHORT", "AUTO PADDED")
+    display.write_both_lines("SHORT", "AUTO PADDED")
     fixture.pause_for_observation("Text padding", fixture.VISUAL_CONFIRMATION_TIME)
 
+@isolated_demo("MARQUEE SCROLL")
 def demo_continuous_scrolling(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate continuous marquee scrolling."""
     
@@ -158,6 +171,7 @@ def demo_continuous_scrolling(display: CD5220, fixture: CD5220DemoFixture):
     fixture.show_banner("MARQUEE COMPLETE", "UPPER LINE ONLY")
     fixture.pause_for_observation("Hardware limitation noted", fixture.VISUAL_CONFIRMATION_TIME)
 
+@isolated_demo("VIEWPORT MODE")
 def demo_viewport_mode(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate window-constrained viewport mode with smooth incremental building."""
     
@@ -197,6 +211,7 @@ def demo_viewport_mode(display: CD5220, fixture: CD5220DemoFixture):
     display.write_viewport(1, "INSTANT_OVERFLOW_TEXT")
     fixture.pause_for_observation("Fast viewport writing", fixture.VISUAL_CONFIRMATION_TIME)
 
+@isolated_demo("SMART MGMT")
 def demo_smart_mode_management(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate smart mode management with clear transitions."""
     
@@ -204,7 +219,7 @@ def demo_smart_mode_management(display: CD5220, fixture: CD5220DemoFixture):
     fixture.show_banner("SMART MGMT", "AUTO TRANSITIONS")
     
     # Enter string mode
-    display.write_both_lines_string("IN STRING MODE", "AUTO-CLEAR PENDING")
+    display.write_both_lines("IN STRING MODE", "AUTO-CLEAR PENDING")
     fixture.pause_for_observation("String mode active", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Trigger auto-clear with normal mode operation
@@ -216,8 +231,8 @@ def demo_smart_mode_management(display: CD5220, fixture: CD5220DemoFixture):
     
     # Test manual mode control
     fixture.show_banner("MANUAL CONTROL", "EXPLICIT CLEARING")
-    display.write_upper_line_string("MANUAL DEMO")
-    display.write_lower_line_string("WILL CLEAR MANUALLY")
+    display.write_upper_line("MANUAL DEMO")
+    display.write_lower_line("WILL CLEAR MANUALLY")
     fixture.pause_for_observation("Before manual clear", fixture.STEP_PAUSE)
     
     display.clear_display()
@@ -225,6 +240,7 @@ def demo_smart_mode_management(display: CD5220, fixture: CD5220DemoFixture):
     display.write_positioned("USER CONTROLLED", 1, 2)
     fixture.pause_for_observation("Manual clear completed", fixture.VISUAL_CONFIRMATION_TIME)
 
+@isolated_demo("CONFIG OPT")
 def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate configuration options including error protection."""
     
@@ -239,7 +255,7 @@ def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
         display.auto_clear_mode_transitions = False
         display.warn_on_mode_transitions = True
         
-        display.write_both_lines_string("AUTO-CLEAR OFF", "PROTECTION ACTIVE")
+        display.write_both_lines("AUTO-CLEAR OFF", "PROTECTION ACTIVE")
         fixture.pause_for_observation("Protection enabled", fixture.VISUAL_CONFIRMATION_TIME)
         
         # This should fail
@@ -262,6 +278,7 @@ def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
         display.auto_clear_mode_transitions = original_auto_clear
         display.warn_on_mode_transitions = original_warn
 
+@isolated_demo("CONVENIENCE")
 def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate convenience methods."""
     
@@ -284,7 +301,7 @@ def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
     # Test rapid updates
     fixture.show_banner("RAPID UPDATES", "STRING MODE")
     for i in range(5):
-        display.write_both_lines_string(f"UPDATE: {i+1}", f"COUNTER: {i+1}")
+        display.write_both_lines(f"UPDATE: {i+1}", f"COUNTER: {i+1}")
         time.sleep(0.4 * fixture.delay_multiplier)
     
     fixture.pause_for_observation("Rapid updates complete", fixture.STEP_PAUSE)
@@ -293,8 +310,6 @@ def run_comprehensive_demo(display: CD5220, config):
     """Run comprehensive demo with balanced feature coverage."""
     logger.info("=== CD5220 COMPREHENSIVE DEMO ===")
     
-    fixture = CD5220DemoFixture(display, config.delay_multiplier)
-    
     # Welcome message
     display.display_message("CD5220 COMPREHENSIVE DEMO - STARTING", 
                           duration=3 * config.delay_multiplier)
@@ -302,19 +317,19 @@ def run_comprehensive_demo(display: CD5220, config):
     # Demo suites with balanced coverage
     demo_suites = {
         'core': [
-            (demo_normal_mode_features, "NORMAL MODE"),
-            (demo_string_mode_features, "STRING MODE"),
-            (demo_smart_mode_management, "SMART MGMT")
+            demo_normal_mode_features,
+            demo_string_mode_features,
+            demo_smart_mode_management
         ],
         'scrolling': [
-            # (demo_continuous_scrolling, "MARQUEE SCROLL"),
-            (demo_viewport_mode, "VIEWPORT MODE")
+            demo_continuous_scrolling,
+            demo_viewport_mode
         ],
         'config': [
-            (demo_configuration_options, "CONFIG OPT")
+            demo_configuration_options
         ],
         'convenience': [
-            (demo_convenience_features, "CONVENIENCE")
+            demo_convenience_features
         ]
     }
     
@@ -326,8 +341,8 @@ def run_comprehensive_demo(display: CD5220, config):
         selected_demos = demo_suites.get(config.demo, demo_suites['core'])
     
     # Run selected demos
-    for demo_func, title in selected_demos:
-        run_isolated_demo(display, demo_func, title, fixture)
+    for demo_func in selected_demos:
+        demo_func(display, config.delay_multiplier)
         
         if not config.auto_advance:
             input("Press Enter to continue...")
@@ -336,7 +351,7 @@ def run_comprehensive_demo(display: CD5220, config):
     
     # Completion message
     display.restore_defaults()
-    display.write_both_lines_string("ALL DEMOS", "COMPLETED!")
+    display.write_both_lines("ALL DEMOS", "COMPLETED!")
     time.sleep(2 * config.delay_multiplier)
     
     logger.info("=== COMPREHENSIVE DEMO COMPLETED ===")

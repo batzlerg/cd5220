@@ -76,7 +76,7 @@ class TestCD5220Unit:
         assert mock_display.current_mode == DisplayMode.NORMAL
         
         # Transition to string mode
-        mock_display.write_upper_line_string("TEST")
+        mock_display.write_upper_line("TEST")
         assert mock_display.current_mode == DisplayMode.STRING
         
         # Transition to scroll mode
@@ -184,7 +184,7 @@ class TestCD5220Unit:
         mock_display.auto_clear_mode_transitions = True
         
         # Go to string mode
-        mock_display.write_upper_line_string("STRING MODE")
+        mock_display.write_upper_line("STRING MODE")
         assert mock_display.current_mode == DisplayMode.STRING
         
         # Normal mode operation should auto-clear
@@ -208,7 +208,7 @@ class TestCD5220Unit:
         mock_display.warn_on_mode_transitions = True
         
         # Go to string mode
-        mock_display.write_upper_line_string("STRING MODE")
+        mock_display.write_upper_line("STRING MODE")
         assert mock_display.current_mode == DisplayMode.STRING
         
         # Normal mode operation should fail
@@ -223,14 +223,14 @@ class TestCD5220Unit:
     def test_string_mode_text_handling(self, mock_display):
         """Test string mode text processing."""
         # Test normal text
-        mock_display.write_upper_line_string("NORMAL TEXT")
+        mock_display.write_upper_line("NORMAL TEXT")
         
         # Test long text (should be truncated)
         long_text = "A" * 25  # Exceeds 20 characters
-        mock_display.write_upper_line_string(long_text)
+        mock_display.write_upper_line(long_text)
         
         # Test empty text
-        mock_display.write_upper_line_string("")
+        mock_display.write_upper_line("")
         
         # Verify state is STRING after all operations
         assert mock_display.current_mode == DisplayMode.STRING
@@ -252,8 +252,8 @@ class TestCD5220Unit:
     
     def test_restore_defaults_method(self, mock_display):
         """Test restore_defaults method with correct state management."""
-        # Change state - write_upper_line_string sets mode to STRING
-        mock_display.write_upper_line_string("TEST")
+        # Change state - write_upper_line sets mode to STRING
+        mock_display.write_upper_line("TEST")
         assert mock_display.current_mode == DisplayMode.STRING
         
         # set_window requires normal mode, so it auto-clears and mode becomes NORMAL
@@ -292,25 +292,6 @@ class TestCD5220Unit:
         # Verify sleep was called (timing validated by the mock)
         assert mock_sleep.call_count >= 2
     
-    def test_legacy_compatibility_methods(self, mock_display):
-        """Test legacy compatibility methods."""
-        # Legacy methods should work and set correct mode
-        mock_display.write_upper_line("LEGACY UPPER")
-        assert mock_display.current_mode == DisplayMode.STRING
-        
-        mock_display.clear_display()
-        mock_display.write_lower_line("LEGACY LOWER")
-        assert mock_display.current_mode == DisplayMode.STRING
-        
-        mock_display.clear_display()
-        mock_display.write_both_lines("LEGACY 1", "LEGACY 2")
-        assert mock_display.current_mode == DisplayMode.STRING
-        
-        # Test legacy scroll method
-        mock_display.clear_display()
-        mock_display.scroll_upper_line("LEGACY SCROLL")
-        assert mock_display.current_mode == DisplayMode.SCROLL
-    
     def test_convenience_methods_updated(self, mock_display):
         """Test convenience methods including updated viewport functionality."""
         # Test display_message method
@@ -338,7 +319,7 @@ class TestCD5220Unit:
             
             with CD5220('mock_port') as display:
                 assert display.ser.is_open
-                display.write_upper_line_string("CONTEXT TEST")
+                display.write_upper_line("CONTEXT TEST")
             
             # Verify close was called
             mock_serial.return_value.close.assert_called_once()
@@ -346,7 +327,7 @@ class TestCD5220Unit:
     def test_mode_isolation_after_operations(self, mock_display):
         """Test that operations don't leave the display in unexpected states."""
         # Test that string operations can be cleanly reset
-        mock_display.write_upper_line_string("TEST STRING")
+        mock_display.write_upper_line("TEST STRING")
         assert mock_display.current_mode == DisplayMode.STRING
         
         mock_display.clear_display()
