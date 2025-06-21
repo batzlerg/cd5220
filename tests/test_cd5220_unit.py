@@ -71,7 +71,7 @@ class TestCD5220Unit:
             mock_display.set_cursor_position(21, 1)
     
     def test_mode_state_tracking(self, mock_display):
-        """Test mode state tracking including new viewport mode."""
+        """Test mode state tracking including viewport mode."""
         # Start in normal mode
         assert mock_display.current_mode == DisplayMode.NORMAL
         
@@ -145,6 +145,11 @@ class TestCD5220Unit:
         
         # Should work for configured line
         mock_display.write_viewport(1, "TEST")  # Should not raise
+        
+        # Test mode requirement for viewport writing
+        mock_display.clear_display()  # Exit viewport mode
+        with pytest.raises(CD5220DisplayError, match="Must be in viewport mode"):
+            mock_display.write_viewport(1, "TEST")
     
     def test_auto_clear_mode_transitions(self, mock_display):
         """Test automatic mode transitions."""
@@ -219,7 +224,7 @@ class TestCD5220Unit:
         assert isinstance(info['active_windows'], dict)
     
     def test_restore_defaults_method(self, mock_display):
-        """Test restore_defaults method with correct mode expectations."""
+        """Test restore_defaults method with correct state management."""
         # Change state - write_upper_line_string sets mode to STRING
         mock_display.write_upper_line_string("TEST")
         assert mock_display.current_mode == DisplayMode.STRING
@@ -281,8 +286,13 @@ class TestCD5220Unit:
     
     def test_convenience_methods(self, mock_display):
         """Test convenience methods including viewport demo."""
+        # Test display_message method
+        mock_display.display_message("TEST MESSAGE", duration=0.1)
+        assert mock_display.current_mode == DisplayMode.STRING
+        
         # Test create_viewport_demo method - this should work without error
-        mock_display.create_viewport_demo(1, 5, 15, "TEST", 0.1)
+        mock_display.clear_display()
+        mock_display.create_viewport_demo(1, 5, 15, "TEST", 0.01)
         assert mock_display.current_mode == DisplayMode.VIEWPORT
         assert 1 in mock_display.active_windows
     
@@ -297,6 +307,33 @@ class TestCD5220Unit:
             
             # Verify close was called
             mock_serial.return_value.close.assert_called_once()
+
+    def test_mode_isolation_after_operations(self, mock_display):
+        """Test that operations don't leave the display in unexpected states."""
+        # Test that string operations can be cleanly reset
+        mock_display.write_upper_line_string("TEST STRING")
+        assert mock_display.current_mode == DisplayMode.STRING
+        
+        mock_display.clear_display()
+        assert mock_display.current_mode == DisplayMode.NORMAL
+        assert mock_display.active_windows == {}
+        
+        # Test that viewport operations can be cleanly reset
+        mock_display.set_window(1, 5, 15)
+        mock_display.enter_viewport_mode()
+        mock_display.write_viewport(1, "TEST VIEWPORT")
+        assert mock_display.current_mode == DisplayMode.VIEWPORT
+        
+        mock_display.cancel_current_line()
+        assert mock_display.current_mode == DisplayMode.NORMAL
+        
+        # Test that scroll operations can be cleanly reset
+        mock_display.scroll_marquee("TEST SCROLL")
+        assert mock_display.current_mode == DisplayMode.SCROLL
+        
+        mock_display.clear_display()
+        assert mock_display.current_mode == DisplayMode.NORMAL
+        assert mock_display.active_windows == {}
 
 class TestCD5220ErrorHandling:
     """Test error handling scenarios."""
@@ -329,6 +366,22 @@ class TestCD5220ErrorHandling:
             
             with pytest.raises(CD5220DisplayError, match="Command failed"):
                 display._send_command(b'test')
+
+    def test_viewport_error_conditions(self):
+        """Test specific viewport mode error conditions."""
+        with patch('serial.Serial') as mock_serial:
+            mock_serial.return_value.is_open = True
+            display = CD5220('mock_port', debug=False)
+            
+            # Test writing to viewport without being in viewport mode
+            display.set_window(1, 5, 15)
+            with pytest.raises(CD5220DisplayError, match="Must be in viewport mode"):
+                display.write_viewport(1, "TEST")
+            
+            # Test entering viewport mode without windows
+            display.clear_all_windows()
+            with pytest.raises(CD5220DisplayError, match="No windows configured"):
+                display.enter_viewport_mode()
 
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])
