@@ -96,9 +96,9 @@ class TestCD5220Unit:
         mock_display.cancel_current_line()
         assert mock_display.current_mode == DisplayMode.NORMAL
     
-    def test_window_management(self, mock_display):
-        """Test window management functionality."""
-        # Test valid window setting
+    def test_window_management_1_based_indexing(self, mock_display):
+        """Test window management with 1-based indexing consistency."""
+        # Test valid window setting with 1-based coordinates
         mock_display.set_window(1, 5, 15)
         assert 1 in mock_display.active_windows
         assert mock_display.active_windows[1] == (5, 15)
@@ -106,6 +106,13 @@ class TestCD5220Unit:
         mock_display.set_window(2, 3, 18)
         assert 2 in mock_display.active_windows
         assert mock_display.active_windows[2] == (3, 18)
+        
+        # Test edge cases for 1-based indexing
+        mock_display.set_window(1, 1, 20)  # Full width window
+        assert mock_display.active_windows[1] == (1, 20)
+        
+        mock_display.set_window(2, 10, 10)  # Single character window
+        assert mock_display.active_windows[2] == (10, 10)
         
         # Test window parameter validation
         with pytest.raises(CD5220DisplayError, match="Line must be 1 or 2"):
@@ -115,7 +122,7 @@ class TestCD5220Unit:
             mock_display.set_window(1, 15, 5)  # start > end
         
         with pytest.raises(CD5220DisplayError, match="Invalid window range"):
-            mock_display.set_window(1, 0, 10)  # start < 1
+            mock_display.set_window(1, 0, 10)  # start < 1 (not 1-based)
         
         with pytest.raises(CD5220DisplayError, match="Invalid window range"):
             mock_display.set_window(1, 5, 25)  # end > 20
@@ -127,6 +134,24 @@ class TestCD5220Unit:
         
         mock_display.clear_all_windows()
         assert mock_display.active_windows == {}
+    
+    def test_consolidated_viewport_writing(self, mock_display):
+        """Test consolidated write_viewport method with optional char_delay."""
+        # Setup viewport
+        mock_display.set_window(1, 5, 15)
+        mock_display.enter_viewport_mode()
+        
+        # Test fast writing (no delay)
+        mock_display.write_viewport(1, "FAST_TEXT")  # Should not raise
+        
+        # Test incremental writing (with delay) - mock _send_command to avoid internal sleeps
+        with patch('time.sleep') as mock_sleep, \
+             patch.object(mock_display, '_send_command') as mock_send_command:
+            mock_display.write_viewport(1, "SLOW", char_delay=0.1)
+            # Should have called sleep for each character
+            assert mock_sleep.call_count == 4  # "SLOW" = 4 characters
+            # Verify sleep was called with correct delay
+            mock_sleep.assert_called_with(0.1)
     
     def test_viewport_mode_requirements(self, mock_display):
         """Test viewport mode entry requirements."""
@@ -143,8 +168,10 @@ class TestCD5220Unit:
         with pytest.raises(CD5220DisplayError, match="No window configured for line 2"):
             mock_display.write_viewport(2, "TEST")
         
-        # Should work for configured line
-        mock_display.write_viewport(1, "TEST")  # Should not raise
+        # Should work for configured line (both fast and incremental)
+        mock_display.write_viewport(1, "TEST")  # Fast mode
+        with patch.object(mock_display, '_send_command'):
+            mock_display.write_viewport(1, "TEST", char_delay=0.1)  # Incremental mode
         
         # Test mode requirement for viewport writing
         mock_display.clear_display()  # Exit viewport mode
@@ -284,17 +311,25 @@ class TestCD5220Unit:
         mock_display.scroll_upper_line("LEGACY SCROLL")
         assert mock_display.current_mode == DisplayMode.SCROLL
     
-    def test_convenience_methods(self, mock_display):
-        """Test convenience methods including viewport demo."""
+    def test_convenience_methods_updated(self, mock_display):
+        """Test convenience methods including updated viewport functionality."""
         # Test display_message method
         mock_display.display_message("TEST MESSAGE", duration=0.1)
         assert mock_display.current_mode == DisplayMode.STRING
         
-        # Test create_viewport_demo method - this should work without error
+        # Test manual viewport setup with incremental writing
         mock_display.clear_display()
-        mock_display.create_viewport_demo(1, 5, 15, "TEST", 0.01)
-        assert mock_display.current_mode == DisplayMode.VIEWPORT
-        assert 1 in mock_display.active_windows
+        mock_display.set_window(1, 5, 15)
+        mock_display.enter_viewport_mode()
+        
+        # Test both fast and incremental writing
+        mock_display.write_viewport(1, "FAST")  # Fast mode
+        
+        # Mock _send_command to avoid internal sleep calls interfering with test
+        with patch('time.sleep') as mock_sleep, \
+             patch.object(mock_display, '_send_command') as mock_send_command:
+            mock_display.write_viewport(1, "SLOW", char_delay=0.1)  # Incremental mode
+            assert mock_sleep.call_count == 4  # 4 characters
     
     def test_context_manager(self):
         """Test context manager functionality."""

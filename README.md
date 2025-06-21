@@ -37,7 +37,7 @@ display.write_both_lines_string(upper, lower)
 display.scroll_marquee(text)
 display.set_window(line, start_col, end_col)
 display.enter_viewport_mode()
-display.write_viewport(line, text)
+display.write_viewport(line, text, char_delay=None)
 ```
 
 ### basic
@@ -62,16 +62,23 @@ with CD5220('/dev/ttyUSB0') as display:
     display.clear_display()  # stop scrolling
 ```
 
-### viewport scrolling
+### viewport 
 ```python
 with CD5220('/dev/ttyUSB0') as display:
-    # set up constrained window
+    # set up static text  
     display.write_positioned("ID: [", 1, 1)
     display.write_positioned("]", 16, 1)
-    
+
+    # set up constrained window
     display.set_window(1, 5, 15)  # columns 5-15
     display.enter_viewport_mode()
     display.write_viewport(1, "VERY_LONG_IDENTIFIER_NAME")
+    
+    # fast writing (default)
+    display.write_viewport(1, "VERY_LONG_IDENTIFIER_NAME")
+    
+    # character-by-character (≈ scrolling within viewport)
+    display.write_viewport(1, "INCREMENTAL_TEXT", char_delay=0.2)
 ```
 
 ### POS display
@@ -81,3 +88,26 @@ with CD5220('/dev/ttyUSB0') as display:
     time.sleep(2)
     display.write_lower_line_string("PRICE: $2.99")  # quick update
 ```
+
+## Testing
+
+```bash
+# Run unit tests
+python -m pytest tests/ -v
+
+# Hardware demo
+python demo.py --port /dev/ttyUSB0 --demo all
+python demo.py --port /dev/ttyUSB0 --demo scrolling --fast
+```
+
+## Features Not Yet Implemented
+
+These features are documented in the CD5220 manual but not implemented in this library:
+
+- International character set selection (ESC f n)
+- User-defined character download (ESC & s n m) 
+- Font selection (ESC c n)
+- EEPROM character storage (ESC s 1, ESC d 1)
+- Peripheral device selection (ESC = n)
+
+These may be added in future versions. Pull requests welcome.
