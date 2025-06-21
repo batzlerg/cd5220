@@ -40,10 +40,11 @@ class CD5220DemoFixture:
         self.delay_multiplier = delay_multiplier
         
         # Hardware-aware timing constants
-        self.BRIGHTNESS_PAUSE = 1.5 * delay_multiplier
-        self.MODE_TRANSITION_DELAY = 0.3 * delay_multiplier
-        self.VISUAL_CONFIRMATION_TIME = 2.0 * delay_multiplier
+        self.BRIGHTNESS_PAUSE = 2.0 * delay_multiplier
+        self.MODE_TRANSITION_DELAY = 0.5 * delay_multiplier
+        self.VISUAL_CONFIRMATION_TIME = 2.5 * delay_multiplier
         self.SCROLL_OBSERVATION_TIME = 12.0 * delay_multiplier
+        self.STEP_PAUSE = 1.0 * delay_multiplier
         
     def setup_demo(self, title: str, subtitle: str = "STARTING...") -> None:
         """Reset to known state and show demo title."""
@@ -63,6 +64,13 @@ class CD5220DemoFixture:
             duration = self.VISUAL_CONFIRMATION_TIME
         self.display.write_both_lines_string(upper, lower)
         time.sleep(duration)
+        
+    def pause_for_observation(self, description: str, duration: float = None) -> None:
+        """Pause with logging for operator observation."""
+        if duration is None:
+            duration = self.VISUAL_CONFIRMATION_TIME
+        logger.info(f"Observe: {description} (pausing {duration:.1f}s)")
+        time.sleep(duration)
 
 def run_isolated_demo(display: CD5220, demo_func, title: str, fixture: CD5220DemoFixture):
     """Run a single demo with proper isolation."""
@@ -75,39 +83,71 @@ def run_isolated_demo(display: CD5220, demo_func, title: str, fixture: CD5220Dem
     logger.info(f"Completed demo: {title}")
 
 def demo_smart_mode_management(display: CD5220, fixture: CD5220DemoFixture):
-    """Demonstrate the smart mode management system."""
+    """Demonstrate the smart mode management system with clear visual flow."""
     
-    # Test 1: String mode to cursor control (auto-clear)
-    fixture.show_banner("TEST 1: AUTO CLEAR", "STRING → CURSOR")
-    display.write_upper_line_string("STRING MODE TEXT")
-    logger.info(f"Current mode: {display.current_mode.value}")
+    # Test 1: Demonstrate string mode persistence
+    fixture.show_banner("STEP 1: STRING MODE", "SHOWING PERSISTENCE")
+    display.write_upper_line_string("THIS IS STRING MODE")
+    display.write_lower_line_string("TEXT STAYS VISIBLE")
+    fixture.pause_for_observation("String mode text visible", fixture.VISUAL_CONFIRMATION_TIME)
     
-    # This should trigger auto-clear and mode transition
+    # Show mode status
+    fixture.show_banner("STRING MODE ACTIVE", f"MODE: {display.current_mode.value.upper()}")
+    fixture.pause_for_observation("Mode indicator", fixture.STEP_PAUSE)
+    
+    # Test 2: Demonstrate auto-clear transition
+    fixture.show_banner("STEP 2: AUTO-CLEAR", "TRIGGERING TRANSITION")
+    
+    # Put content back for the transition demo
+    display.write_upper_line_string("ABOUT TO AUTO-CLEAR")
+    display.write_lower_line_string("WATCH TEXT VANISH")
+    fixture.pause_for_observation("Text before auto-clear", fixture.VISUAL_CONFIRMATION_TIME)
+    
+    # This triggers auto-clear - user will see text disappear
+    logger.info("Triggering auto-clear by enabling cursor...")
     display.cursor_on()
+    display.set_cursor_position(1, 1)
+    display.write_at_cursor("AUTO-CLEAR WORKED!")
     display.set_cursor_position(1, 2)
-    display.write_at_cursor("CURSOR WORKS!")
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    display.write_at_cursor("NOW IN NORMAL MODE")
     display.cursor_off()
+    fixture.pause_for_observation("After auto-clear transition", fixture.VISUAL_CONFIRMATION_TIME)
     
-    # Test 2: Manual mode control demonstration
-    fixture.show_banner("TEST 2: MANUAL", "MODE CONTROL")
-    display.write_upper_line_string("MANUAL CONTROL")
-    logger.info(f"Before clear: {display.current_mode.value}")
+    # Test 3: Manual mode control demonstration
+    fixture.show_banner("STEP 3: MANUAL CTRL", "EXPLICIT CLEARING")
+    display.write_upper_line_string("MANUAL CONTROL DEMO")
+    display.write_lower_line_string("WILL CLEAR MANUALLY")
+    fixture.pause_for_observation("Text before manual clear", fixture.VISUAL_CONFIRMATION_TIME)
+    
+    logger.info(f"Before manual clear: {display.current_mode.value}")
     display.clear_display()
-    logger.info(f"After clear: {display.current_mode.value}")
-    display.write_positioned("CLEARED MANUALLY", 1, 1)
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    logger.info(f"After manual clear: {display.current_mode.value}")
+    
+    display.write_positioned("CLEARED BY USER", 1, 1)
+    display.write_positioned("EXPLICIT COMMAND", 1, 2)
+    fixture.pause_for_observation("After manual clear", fixture.VISUAL_CONFIRMATION_TIME)
 
 def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
-    """Demonstrate all normal mode functionality."""
+    """Demonstrate all normal mode functionality with proper content for brightness observation."""
     
-    # Test brightness control
-    fixture.show_banner("BRIGHTNESS DEMO", "LEVELS 1-4")
-    for level in range(1, 5):
+    # Test brightness control with content visible
+    fixture.show_banner("BRIGHTNESS DEMO", "OBSERVE CHANGES")
+    
+    # Establish baseline content for brightness observation
+    display.clear_display()
+    display.write_positioned("BRIGHTNESS TEST", 1, 1)
+    display.write_positioned("LEVEL: 4/4 (MAX)", 1, 2)
+    fixture.pause_for_observation("Brightness level 4", fixture.BRIGHTNESS_PAUSE)
+    
+    for level in range(3, 0, -1):  # Count down from 3 to 1
         display.set_brightness(level)
-        display.write_positioned(f"BRIGHTNESS: {level}/4", 1, 1)
-        display.write_positioned("NORMAL MODE", 1, 2)
-        time.sleep(fixture.BRIGHTNESS_PAUSE)
+        display.write_positioned(f"LEVEL: {level}/4", 7, 2)  # Update just the level number
+        fixture.pause_for_observation(f"Brightness level {level}", fixture.BRIGHTNESS_PAUSE)
+    
+    # Return to max brightness for remaining demos
+    display.set_brightness(4)
+    display.write_positioned("LEVEL: 4/4 (MAX)", 7, 2)
+    fixture.pause_for_observation("Brightness restored", fixture.STEP_PAUSE)
     
     # Test cursor functionality  
     fixture.show_banner("CURSOR DEMO", "POSITIONING")
@@ -115,39 +155,40 @@ def demo_normal_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     display.write_positioned("CURSOR DEMO", 1, 1)
     display.cursor_on()
     
-    # Move cursor through positions
+    # Move cursor through positions with visible feedback
     positions = [(1, 2), (5, 2), (10, 2), (15, 2), (20, 2)]
-    for col, row in positions:
+    for i, (col, row) in enumerate(positions):
         display.set_cursor_position(col, row)
+        display.write_at_cursor(str(i+1))
         time.sleep(0.5 * fixture.delay_multiplier)
+    
+    fixture.pause_for_observation("Cursor positioning complete", fixture.STEP_PAUSE)
     
     # Test writing at cursor
     display.set_cursor_position(1, 2)
-    display.write_at_cursor("Hello ")
-    time.sleep(0.5 * fixture.delay_multiplier)
-    display.write_at_cursor("World!")
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    display.write_at_cursor("HELLO WORLD!")
     display.cursor_off()
+    fixture.pause_for_observation("Cursor writing demo", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test display modes with proper restoration
     fixture.show_banner("DISPLAY MODES", "TESTING")
     
     display.set_overwrite_mode()
     display.write_positioned("OVERWRITE MODE", 1, 1)
-    display.write_positioned("ACTIVE", 1, 2)
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    display.write_positioned("ACTIVE NOW", 1, 2)
+    fixture.pause_for_observation("Overwrite mode", fixture.VISUAL_CONFIRMATION_TIME)
     
     display.set_vertical_scroll_mode()
     display.write_positioned("VERTICAL SCROLL", 1, 1)
     display.write_positioned("MODE ACTIVE", 1, 2)
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    fixture.pause_for_observation("Vertical scroll mode", fixture.VISUAL_CONFIRMATION_TIME)
     
     display.set_horizontal_scroll_mode()
     display.write_positioned("HORIZONTAL MODE", 1, 1)
     display.write_positioned("ACTIVE", 1, 2)
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    fixture.pause_for_observation("Horizontal scroll mode", fixture.VISUAL_CONFIRMATION_TIME)
     
-    # Restore overwrite mode before exit
+    # Explicitly restore overwrite mode before exit
     display.set_overwrite_mode()
 
 def demo_string_mode_features(display: CD5220, fixture: CD5220DemoFixture):
@@ -158,24 +199,24 @@ def demo_string_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     display.write_upper_line_string("STRING MODE DEMO")
     display.write_lower_line_string("FAST LINE WRITING")
     logger.info(f"Current mode: {display.current_mode.value}")
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    fixture.pause_for_observation("String mode writing", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test both lines together
     fixture.show_banner("BOTH LINES", "TOGETHER")
-    display.write_both_lines_string("BOTH LINES", "UPDATED TOGETHER")
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    display.write_both_lines_string("BOTH LINES AT ONCE", "UPDATED TOGETHER")
+    fixture.pause_for_observation("Both lines updated", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test text handling (truncation)
     fixture.show_banner("TEXT HANDLING", "AUTO TRUNCATE")
     display.write_upper_line_string("THIS IS A VERY LONG LINE THAT EXCEEDS TWENTY CHARACTERS")
     display.write_lower_line_string("TRUNCATED TO 20")
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    fixture.pause_for_observation("Long text truncation", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test automatic padding
     fixture.show_banner("AUTO PADDING", "SHORT TEXT")
     display.write_upper_line_string("SHORT")
     display.write_lower_line_string("PADDED")
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    fixture.pause_for_observation("Text padding", fixture.VISUAL_CONFIRMATION_TIME)
 
 def demo_scroll_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate scroll mode functionality with proper timing."""
@@ -183,9 +224,9 @@ def demo_scroll_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     # Test upper line scrolling with hardware-aware timing
     fixture.show_banner("SCROLL DEMO", "UPPER LINE")
     display.clear_display()
-    display.write_positioned("SCROLL DEMO", 1, 2)  # Static text on line 2
+    display.write_positioned("STATIC TEXT", 1, 2)  # Static text on line 2
     
-    scroll_text = "CONTINUOUS SCROLLING TEXT ON UPPER LINE - OBSERVE MULTIPLE CYCLES"
+    scroll_text = "CONTINUOUS SCROLLING TEXT ON UPPER LINE - OBSERVE MULTIPLE CYCLES - HARDWARE REFRESH ~1HZ"
     display.scroll_upper_line(scroll_text)
     logger.info(f"Current mode: {display.current_mode.value}")
     
@@ -196,7 +237,7 @@ def demo_scroll_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     
     # Test lower line scrolling (stops upper scroll)
     fixture.show_banner("LOWER SCROLL", "REPLACES UPPER", duration=1.0)
-    display.scroll_lower_line("LOWER LINE SCROLLING - NOTICE HOW THIS STOPS UPPER SCROLL")
+    display.scroll_lower_line("LOWER LINE SCROLLING - NOTICE HOW THIS STOPS UPPER SCROLL AND STARTS LOWER")
     time.sleep(observation_time * 0.8)  # Slightly shorter for variety
     
     # Demonstrate cancel_current_line() instead of clear_display()
@@ -207,7 +248,7 @@ def demo_scroll_mode_features(display: CD5220, fixture: CD5220DemoFixture):
     # Show that display content is preserved (unlike clear_display)
     display.write_positioned("CANCELLED, NOT", 1, 1)
     display.write_positioned("CLEARED", 1, 2)
-    time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+    fixture.pause_for_observation("Cancel vs clear behavior", fixture.VISUAL_CONFIRMATION_TIME)
 
 def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate different configuration options."""
@@ -224,6 +265,8 @@ def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
         display.warn_on_mode_transitions = True
         
         display.write_upper_line_string("AUTO-CLEAR OFF")
+        display.write_lower_line_string("MODE PROTECTION ON")
+        fixture.pause_for_observation("Auto-clear disabled", fixture.VISUAL_CONFIRMATION_TIME)
         
         try:
             # This should fail without auto-clear
@@ -232,15 +275,17 @@ def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
         except CD5220DisplayError as e:
             logger.info(f"Expected error caught: {e}")
             fixture.show_banner("ERROR CAUGHT", "AS EXPECTED")
-            time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+            fixture.pause_for_observation("Error protection working", fixture.VISUAL_CONFIRMATION_TIME)
         
         # Manual clear should work
         display.clear_display()
         display.cursor_on()
-        display.set_cursor_position(1, 2)
+        display.set_cursor_position(1, 1)
         display.write_at_cursor("MANUAL CLEAR OK")
+        display.set_cursor_position(1, 2)
+        display.write_at_cursor("PROTECTION WORKS")
         display.cursor_off()
-        time.sleep(fixture.VISUAL_CONFIRMATION_TIME)
+        fixture.pause_for_observation("Manual clear successful", fixture.VISUAL_CONFIRMATION_TIME)
         
     finally:
         # Restore original settings
@@ -253,10 +298,10 @@ def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
     
     # Test display_message
     fixture.show_banner("CONVENIENCE", "METHODS")
-    display.display_message("This is a long message that will wrap automatically", 
+    display.display_message("This is a long message that will wrap automatically across lines", 
                           duration=fixture.VISUAL_CONFIRMATION_TIME, mode="string")
     
-    display.display_message("SHORTER MESSAGE", 
+    display.display_message("SHORTER MESSAGE IN NORMAL MODE", 
                           duration=fixture.VISUAL_CONFIRMATION_TIME, mode="normal")
     
     # Test rapid updates (staying in string mode)
@@ -264,6 +309,8 @@ def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
     for i in range(5):
         display.write_both_lines_string(f"COUNTER: {i+1}", f"RAPID UPDATE #{i+1}")
         time.sleep(0.5 * fixture.delay_multiplier)
+    
+    fixture.pause_for_observation("Rapid update sequence", fixture.STEP_PAUSE)
 
 def run_comprehensive_demo(display: CD5220, config):
     """Run a comprehensive demo showing all capabilities."""

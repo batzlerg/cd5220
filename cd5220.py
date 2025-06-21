@@ -164,9 +164,12 @@ class CD5220:
             self._send_command(self.CMD_INITIALIZE, 0.2, "Initialize display")
             self.restore_defaults()
             
-        except serial.SerialException as e:
+        except (serial.SerialException, serial.SerialTimeoutException) as e:
             logger.error(f"Serial connection failed: {e}")
             raise CD5220DisplayError(f"Serial connection failed: {e}")
+        except Exception as e:
+            logger.error(f"Initialization failed: {e}")
+            raise CD5220DisplayError(f"Initialization failed: {e}")
 
     def _send_command(self, command: bytes, delay: float = None, description: str = "Command") -> None:
         """

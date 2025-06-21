@@ -219,17 +219,31 @@ class TestCD5220ErrorHandling:
     
     def test_serial_connection_failure(self):
         """Test handling of serial connection failures."""
-        with patch('serial.Serial', side_effect=Exception("Connection failed")):
+        with patch('serial.Serial', side_effect=serial.SerialException("Connection failed")):
             with pytest.raises(CD5220DisplayError, match="Serial connection failed"):
                 CD5220('invalid_port')
     
-    def test_command_transmission_failure(self):
-        """Test handling of command transmission failures."""
+    def test_command_transmission_failure_during_init(self):
+        """Test handling of command transmission failures during initialization."""
         with patch('serial.Serial') as mock_serial:
-            mock_serial.return_value.write.side_effect = Exception("Write failed")
+            # Set up the mock to succeed for connection but fail for write
+            mock_instance = MagicMock()
+            mock_instance.write.side_effect = serial.SerialException("Write failed")
+            mock_serial.return_value = mock_instance
+            
+            with pytest.raises(CD5220DisplayError, match="Initialization failed"):
+                CD5220('mock_port')
+    
+    def test_command_transmission_failure_after_init(self):
+        """Test handling of command transmission failures after initialization."""
+        with patch('serial.Serial') as mock_serial:
+            mock_serial.return_value.is_open = True
+            display = CD5220('mock_port', debug=False)
+            
+            # Now make write fail
+            display.ser.write.side_effect = serial.SerialException("Write failed")
             
             with pytest.raises(CD5220DisplayError, match="Command failed"):
-                display = CD5220('mock_port')
                 display._send_command(b'test')
 
 if __name__ == '__main__':
