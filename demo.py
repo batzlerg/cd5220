@@ -6,7 +6,7 @@ Demonstrates all documented modes and features with proper test isolation:
 - Normal Mode: Cursor control, brightness, positioning  
 - String Mode: Fast line writing
 - Continuous Scrolling: Automatic marquee movement (upper line only)
-- Viewport Mode: Window-constrained display with overflow handling
+- Viewport Mode: Window-constrained display with smooth overflow handling
 - Smart Mode Management: Automatic transitions and error handling
 """
 
@@ -46,7 +46,7 @@ class CD5220DemoFixture:
         time.sleep(self.VISUAL_CONFIRMATION_TIME)
         
     def teardown_demo(self) -> None:
-        """Clean up after demo."""
+        """Clean teardown after each demo."""
         self.display.restore_defaults()
         time.sleep(self.MODE_TRANSITION_DELAY)
         
@@ -159,49 +159,43 @@ def demo_continuous_scrolling(display: CD5220, fixture: CD5220DemoFixture):
     fixture.pause_for_observation("Hardware limitation noted", fixture.VISUAL_CONFIRMATION_TIME)
 
 def demo_viewport_mode(display: CD5220, fixture: CD5220DemoFixture):
-    """Demonstrate window-constrained viewport mode."""
+    """Demonstrate window-constrained viewport mode with smooth incremental building."""
     
-    # Test 1: Basic window overflow
+    # Test 1: Smooth incremental character building
     fixture.show_banner("VIEWPORT MODE", "WINDOW CONSTRAINED")
     display.clear_display()
     
-    # Set up static context FIRST
-    display.write_positioned("****", 1, 1)
-    display.write_positioned("****", 17, 1)
-    display.write_positioned("WINDOW: COLS 4-15", 1, 2)
+    # Set up static context FIRST with consistent 1-based indexing
+    display.write_positioned("****", 1, 1)      # Positions 1-4
+    display.write_positioned("****", 17, 1)     # Positions 17-20
+    display.write_positioned("WINDOW: COLS 5-16", 1, 2)  # Updated label
     
-    # NOW set window and enter viewport mode
-    display.set_window(1, 4, 15)
+    # NOW set window with 1-based indexing and enter viewport mode
+    display.set_window(1, 5, 16)  # Window columns 5-16 (12 characters)
     display.enter_viewport_mode()
     
-    # Demonstrate overflow handling
-    test_text = "OVERFLOW_DEMONSTRATION_TEXT"
-    for i in range(5, len(test_text) + 1, 2):
-        display.write_viewport(1, test_text[:i])
-        time.sleep(0.4 * fixture.delay_multiplier)
+    # Demonstrate smooth incremental character building
+    test_text = "INCREMENTAL_DEMO_TEXT"
+    display.write_viewport(1, test_text, char_delay=0.3 * fixture.delay_multiplier)
     
-    fixture.pause_for_observation("Window overflow demo", fixture.VIEWPORT_DEMO_TIME)
+    fixture.pause_for_observation("Smooth incremental building", fixture.VIEWPORT_DEMO_TIME)
     
-    # Test 2: Dual windows
-    fixture.show_banner("DUAL WINDOWS", "BOTH LINES")
+    # Test 2: Fast viewport writing (original behavior)
+    fixture.show_banner("FAST VIEWPORT", "INSTANT WRITING")
     display.clear_display()
     
     # Static markers
-    display.write_positioned("L1:", 1, 1)
-    display.write_positioned("L2:", 1, 2)
-    display.write_positioned("END", 18, 2)
+    display.write_positioned("ID:[", 1, 1)
+    display.write_positioned("]", 16, 1)
+    display.write_positioned("FAST MODE", 1, 2)
     
-    # Different windows on both lines
-    display.set_window(1, 4, 14)   # Line 1: 11 chars
-    display.set_window(2, 4, 17)   # Line 2: 14 chars
+    # Different window for variety
+    display.set_window(1, 5, 15)
     display.enter_viewport_mode()
     
-    # Demonstrate both viewports
-    display.write_viewport(1, "VIEWPORT_ONE_TEXT")
-    time.sleep(2 * fixture.delay_multiplier)
-    display.write_viewport(2, "VIEWPORT_TWO_LONGER")
-    
-    fixture.pause_for_observation("Dual viewports", fixture.VIEWPORT_DEMO_TIME)
+    # Fast writing (no char_delay)
+    display.write_viewport(1, "INSTANT_OVERFLOW_TEXT")
+    fixture.pause_for_observation("Fast viewport writing", fixture.VISUAL_CONFIRMATION_TIME)
 
 def demo_smart_mode_management(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate smart mode management with clear transitions."""
@@ -269,20 +263,23 @@ def demo_configuration_options(display: CD5220, fixture: CD5220DemoFixture):
         display.warn_on_mode_transitions = original_warn
 
 def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
-    """Demonstrate convenience methods and rapid updates."""
+    """Demonstrate convenience methods."""
     
     # Test display_message
     fixture.show_banner("CONVENIENCE", "METHODS")
     display.display_message("Auto-wrapped message across lines", 
                           duration=fixture.VISUAL_CONFIRMATION_TIME)
     
-    # Test viewport convenience method
-    fixture.show_banner("VIEWPORT HELPER", "CONVENIENCE METHOD")
+    # Test viewport convenience with smooth building
+    fixture.show_banner("SMOOTH VIEWPORT", "CONVENIENCE DEMO")
     display.clear_display()
-    display.write_positioned("HELPER: 6-16", 1, 2)
+    display.write_positioned("DEMO: COLS 6-16", 1, 2)
     
-    display.create_viewport_demo(1, 6, 16, "CONVENIENCE_DEMO_TEXT", 0.3)
-    fixture.pause_for_observation("Convenience method", fixture.VISUAL_CONFIRMATION_TIME)
+    # Manual viewport setup for demonstration
+    display.set_window(1, 6, 16)
+    display.enter_viewport_mode()
+    display.write_viewport(1, "CONVENIENCE_DEMO_TEXT", char_delay=0.25 * fixture.delay_multiplier)
+    fixture.pause_for_observation("Smooth convenience demo", fixture.VISUAL_CONFIRMATION_TIME)
     
     # Test rapid updates
     fixture.show_banner("RAPID UPDATES", "STRING MODE")

@@ -408,10 +408,12 @@ class CD5220:
         """
         Set window range for viewport mode (normal mode only).
         
+        Uses consistent 1-based indexing. Window boundaries match writing positions.
+
         Args:
             line: Line number (1 or 2)
-            start_col: Starting column (1-20)
-            end_col: Ending column (start_col to 20)
+            start_col: Starting column (1-20) - writing begins here
+            end_col: Ending column (start_col to 20) - writing ends here
         """
         if line not in (1, 2):
             raise CD5220DisplayError("Line must be 1 or 2")
@@ -420,9 +422,14 @@ class CD5220:
         
         self._ensure_normal_mode("Window management")
         
-        cmd = self.CMD_WINDOW_SET + bytes([1, start_col, end_col, line])
+        # Convert from 1-based API coordinates to 0-based hardware coordinates
+        hw_start_col = start_col - 1
+        hw_end_col = end_col - 1
+
+        cmd = self.CMD_WINDOW_SET + bytes([1, hw_start_col, hw_end_col, line])
         self._send_command(cmd, 0.1, f"Set window: line {line}, cols {start_col}-{end_col}")
-        self._active_windows[line] = (start_col, end_col)
+        self._active_windows[line] = (start_col, end_col)  # Store API coordinates for consistency
+
 
     def clear_window(self, line: int) -> None:
         """Clear window range for specified line (normal mode only)."""
@@ -460,13 +467,15 @@ class CD5220:
         
         logger.info(f"Entered viewport mode with windows: {self._active_windows}")
 
-    def write_viewport(self, line: int, text: str) -> None:
+    def write_viewport(self, line: int, text: str, char_delay: float = None) -> None:
         """
-        Write text within viewport window boundaries.
+        Write text to viewport window with optional smooth character building.
         
         Args:
             line: Line number (1 or 2)
             text: Text to write
+            char_delay: If None, writes all text at once (fast).
+                       If specified, writes character-by-character with delay (smooth building effect).
         """
         if self._current_mode != DisplayMode.VIEWPORT:
             raise CD5220DisplayError("Must be in viewport mode. Use enter_viewport_mode() first.")
@@ -475,10 +484,20 @@ class CD5220:
             raise CD5220DisplayError(f"No window configured for line {line}")
         
         start_col, end_col = self._active_windows[line]
-        self._send_cursor_position_raw(start_col, line)
-        self._write_text_raw(text)
         
-        logger.debug(f"Viewport write: line {line}, window {start_col}-{end_col}, text: '{text}'")
+        if char_delay is None:
+            # Fast mode: write entire text at once (original behavior)
+            self._send_cursor_position_raw(start_col, line)
+            self._write_text_raw(text)
+            logger.debug(f"Viewport write: line {line}, window {start_col}-{end_col}, text: '{text}'")
+        else:
+            # Smooth mode: character-by-character building with hardware cursor management
+            self._send_cursor_position_raw(start_col, line)
+            logger.debug(f"Viewport incremental write: line {line}, window {start_col}-{end_col}, text: '{text}'")
+
+            for char in text:
+                self._write_text_raw(char)
+                time.sleep(char_delay)
 
     # === FONT CONTROL ===
     
@@ -513,16 +532,6 @@ class CD5220:
                 self.write_positioned(lines[1], 1, 2)
         
         time.sleep(duration)
-
-    def create_viewport_demo(self, line: int, window_start: int, window_end: int, 
-                           demo_text: str, char_delay: float = 0.2) -> None:
-        """Convenience method to demonstrate viewport functionality."""
-        self.set_window(line, window_start, window_end)
-        self.enter_viewport_mode()
-        
-        for i in range(1, len(demo_text) + 1):
-            self.write_viewport(line, demo_text[:i])
-            time.sleep(char_delay)
 
     # === LEGACY COMPATIBILITY METHODS ===
     
