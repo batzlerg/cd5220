@@ -30,7 +30,7 @@ class CD5220DemoFixture:
         self.display = display
         self.delay_multiplier = delay_multiplier
         
-        # Timing constants
+        # Timing constants - these are for user observation, not hardware delays
         self.BRIGHTNESS_PAUSE = 2.0 * delay_multiplier
         self.MODE_TRANSITION_DELAY = 0.5 * delay_multiplier
         self.VISUAL_CONFIRMATION_TIME = 2.5 * delay_multiplier
@@ -369,8 +369,10 @@ def main():
                        default='all', help='Run specific demo suite')
     parser.add_argument('--auto-advance', action='store_true',
                        help='Auto-advance between demos')
-    parser.add_argument('--command-delay', type=float, default=0.05,
-                       help='Base command delay in seconds')
+    parser.add_argument('--base-command-delay', type=float, default=0.0,
+                       help='Base command delay in seconds (default: 0.0 for maximum performance)')
+    parser.add_argument('--mode-transition-delay', type=float, default=0.0,
+                       help='Mode transition delay in seconds (default: 0.0)')
     parser.add_argument('--verbose', action='store_true',
                        help='Enable verbose debug logging')
     
@@ -386,6 +388,7 @@ def main():
     logger.info("CD5220 Demo Suite")
     logger.info(f"Port: {args.port} | Baud: {args.baud} | Demo: {args.demo}")
     logger.info(f"Fast mode: {args.fast} | Auto-advance: {args.auto_advance}")
+    logger.info(f"Base command delay: {args.base_command_delay}s | Mode transition delay: {args.mode_transition_delay}s")
     
     try:
         with CD5220(
@@ -394,7 +397,8 @@ def main():
             debug=args.verbose,
             auto_clear_mode_transitions=True,
             warn_on_mode_transitions=True,
-            command_delay=args.command_delay
+            base_command_delay=args.base_command_delay,
+            mode_transition_delay=args.mode_transition_delay
         ) as display:
             logger.info("Display initialized")
             run_comprehensive_demo(display, args)

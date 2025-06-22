@@ -30,8 +30,8 @@ display.set_brightness(1-4)
 
 # text writing  
 display.write_positioned(text, col, row)
-display.write_upper_line_string(text)
-display.write_both_lines_string(upper, lower) 
+display.write_upper_line(text)
+display.write_both_lines(upper, lower) 
 
 # scrolling
 display.scroll_marquee(text)

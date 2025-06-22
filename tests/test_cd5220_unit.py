@@ -29,9 +29,23 @@ class TestCD5220Unit:
         assert mock_display.current_mode == DisplayMode.NORMAL
         assert mock_display.auto_clear_mode_transitions == True
         assert mock_display.warn_on_mode_transitions == True
-        assert mock_display.default_delay == 0.05
-        assert mock_display.bulk_multiplier == 2.0
+        assert mock_display.base_command_delay == 0.0
+        assert mock_display.mode_transition_delay == 0.0
+        assert mock_display.initialization_delay == 0.2
         assert mock_display.active_windows == {}
+    
+    def test_custom_initialization_parameters(self):
+        """Test initialization with custom delay parameters."""
+        with patch('serial.Serial') as mock_serial:
+            mock_serial.return_value.is_open = True
+            display = CD5220('mock_port', 
+                            debug=False,
+                            base_command_delay=0.01,
+                            mode_transition_delay=0.05,
+                            initialization_delay=0.5)
+            assert display.base_command_delay == 0.01
+            assert display.mode_transition_delay == 0.05
+            assert display.initialization_delay == 0.5
     
     def test_brightness_parameter_validation(self, mock_display):
         """Test brightness parameter validation."""
@@ -69,6 +83,24 @@ class TestCD5220Unit:
         
         with pytest.raises(CD5220DisplayError, match="Column must be 1-20"):
             mock_display.set_cursor_position(21, 1)
+    
+    def test_delay_parameter_positioning(self, mock_display):
+        """Test that delay parameters are properly positioned at the end of argument lists."""
+        # Test methods with delay parameter at the end
+        mock_display.set_brightness(3, delay=0.1)
+        mock_display.set_cursor_position(1, 1, delay=0.05)
+        mock_display.write_upper_line("TEST", delay=0.02)
+        mock_display.write_lower_line("TEST", delay=0.02)
+        mock_display.write_both_lines("UP", "DOWN", delay=0.02)
+        mock_display.clear_display(delay=0.01)
+        mock_display.set_window(1, 5, 15, delay=0.03)
+        
+        # Set up viewport mode for write_viewport test
+        mock_display.enter_viewport_mode()
+        mock_display.write_viewport(1, "TEST", char_delay=0.1, delay=0.02)
+        
+        # These should all work without raising exceptions
+        assert True
     
     def test_mode_state_tracking(self, mock_display):
         """Test mode state tracking including viewport mode."""
@@ -239,15 +271,17 @@ class TestCD5220Unit:
         """Test display info reporting."""
         info = mock_display.get_display_info()
         
-        expected_keys = ['mode', 'auto_clear', 'warn_transitions', 'default_delay', 'bulk_multiplier', 'active_windows']
+        expected_keys = ['mode', 'auto_clear', 'warn_transitions', 'base_command_delay', 
+                        'mode_transition_delay', 'initialization_delay', 'active_windows']
         for key in expected_keys:
             assert key in info
         
         assert info['mode'] == 'normal'
         assert isinstance(info['auto_clear'], bool)
         assert isinstance(info['warn_transitions'], bool)
-        assert isinstance(info['default_delay'], float)
-        assert isinstance(info['bulk_multiplier'], float)
+        assert isinstance(info['base_command_delay'], float)
+        assert isinstance(info['mode_transition_delay'], float)
+        assert isinstance(info['initialization_delay'], float)
         assert isinstance(info['active_windows'], dict)
     
     def test_restore_defaults_method(self, mock_display):
@@ -266,36 +300,46 @@ class TestCD5220Unit:
         assert mock_display.current_mode == DisplayMode.NORMAL
         assert mock_display.active_windows == {}
     
-    def test_configurable_timing(self, mock_display):
-        """Test configurable timing system."""
-        # Test default timing
-        assert mock_display.default_delay == 0.05
-        assert mock_display.bulk_multiplier == 2.0
-        
-        # Create display with custom timing
-        with patch('serial.Serial') as mock_serial:
-            mock_serial.return_value.is_open = True
-            custom_display = CD5220('mock_port', command_delay=0.1, bulk_delay_multiplier=3.0)
-            assert custom_display.default_delay == 0.1
-            assert custom_display.bulk_multiplier == 3.0
+    def test_send_command_delay_override(self, mock_display):
+        """Test _send_command delay override system."""
+        with patch('time.sleep') as mock_sleep:
+            # Test default delay (should be 0.0)
+            mock_display._send_command(b'test', "Test command")
+            mock_sleep.assert_not_called()  # No sleep for 0.0 delay
+            
+            # Test explicit delay override
+            mock_display._send_command(b'test', "Test command", delay=0.1)
+            mock_sleep.assert_called_once_with(0.1)
+            
+            # Reset mock
+            mock_sleep.reset_mock()
+            
+            # Test with display that has non-zero base delay
+            mock_display.base_command_delay = 0.05
+            mock_display._send_command(b'test', "Test command")
+            mock_sleep.assert_called_once_with(0.05)
     
-    @patch('time.sleep')  # Mock sleep to speed up tests
-    def test_command_delay_calculation(self, mock_sleep, mock_display):
-        """Test adaptive command delay calculation."""
-        # Short command should use default delay
-        mock_display._send_command(b'short', description="Short command")
+    def test_mode_transition_delays(self, mock_display):
+        """Test mode transition delay system."""
+        # Set custom mode transition delay
+        mock_display.mode_transition_delay = 0.1
         
-        # Long command should use scaled delay
-        long_command = b'A' * 40  # 40 bytes
-        mock_display._send_command(long_command, description="Long command")
-        
-        # Verify sleep was called (timing validated by the mock)
-        assert mock_sleep.call_count >= 2
+        with patch('time.sleep') as mock_sleep:
+            # Mode transition methods should use mode_transition_delay
+            mock_display.set_overwrite_mode()
+            mock_sleep.assert_called_with(0.1)
+            
+            # Reset mock
+            mock_sleep.reset_mock()
+            
+            # Override should work
+            mock_display.set_vertical_scroll_mode(delay=0.2)
+            mock_sleep.assert_called_with(0.2)
     
     def test_convenience_methods_updated(self, mock_display):
         """Test convenience methods including updated viewport functionality."""
-        # Test display_message method
-        mock_display.display_message("TEST MESSAGE", duration=0.1)
+        # Test display_message method with delay parameter
+        mock_display.display_message("TEST MESSAGE", duration=0.1, delay=0.05)
         assert mock_display.current_mode == DisplayMode.STRING
         
         # Test manual viewport setup with incremental writing
@@ -303,13 +347,13 @@ class TestCD5220Unit:
         mock_display.set_window(1, 5, 15)
         mock_display.enter_viewport_mode()
         
-        # Test both fast and incremental writing
-        mock_display.write_viewport(1, "FAST")  # Fast mode
+        # Test both fast and incremental writing with delay overrides
+        mock_display.write_viewport(1, "FAST", delay=0.01)  # Fast mode with command delay
         
         # Mock _send_command to avoid internal sleep calls interfering with test
         with patch('time.sleep') as mock_sleep, \
              patch.object(mock_display, '_send_command') as mock_send_command:
-            mock_display.write_viewport(1, "SLOW", char_delay=0.1)  # Incremental mode
+            mock_display.write_viewport(1, "SLOW", char_delay=0.1, delay=0.02)  # Incremental mode
             assert mock_sleep.call_count == 4  # 4 characters
     
     def test_context_manager(self):

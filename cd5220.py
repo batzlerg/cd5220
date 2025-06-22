@@ -45,6 +45,18 @@ class CD5220:
             display.write_both_lines("Hello", "World")
             display.scroll_marquee("Scrolling text...")
     
+    Hardware Compatibility:
+        Most VFD displays work with zero delays (default). If your hardware 
+        experiences dropped commands or mode transition failures, try:
+        
+        # Slow hardware compatibility
+        display = CD5220('/dev/ttyUSB0', 
+                        base_command_delay=0.01,      # 10ms between commands
+                        mode_transition_delay=0.05)   # 50ms for mode changes
+        
+        # Per-command delay override
+        display.set_brightness(3, delay=0.1)  # Force 100ms delay
+    
     Mode Management:
     - NORMAL: Full cursor/ESC command support (default)
     - STRING: Fast line writing, limited to CLR/CAN commands
@@ -54,11 +66,11 @@ class CD5220:
     
     DISPLAY_WIDTH = 20
     DISPLAY_HEIGHT = 2
-    
+
     # Hardware timing constants
+    # SCROLL_REFRESH_RATE doesn't set anything, it's determined by hardware.
+    # This value is just for calculating dependent timing elsewhere.
     SCROLL_REFRESH_RATE = 1.0  # Hz
-    MODE_SETTLING_TIME = 0.2   # seconds
-    BRIGHTNESS_CHANGE_TIME = 0.3  # seconds
     
     # Core control commands
     CMD_CLEAR = b'\x0C'
@@ -96,11 +108,14 @@ class CD5220:
     CMD_EXTENDED_FONT = b'\x1B\x63'
 
     def __init__(self, serial_port: Union[str, serial.Serial], 
-                 baudrate: int = 9600, debug: bool = True,
+                 baudrate: int = 9600, 
+                 debug: bool = True,
                  auto_clear_mode_transitions: bool = True,
                  warn_on_mode_transitions: bool = True,
-                 command_delay: float = 0.05,
-                 bulk_delay_multiplier: float = 2.0):
+                 # Hardware compatibility delays (normally 0.0)
+                 base_command_delay: float = 0.0,
+                 mode_transition_delay: float = 0.0,
+                 initialization_delay: float = 0.2):
         """
         Initialize CD5220 controller.
         
@@ -110,14 +125,16 @@ class CD5220:
             debug: Enable debug logging
             auto_clear_mode_transitions: Auto-clear when mode conflicts occur
             warn_on_mode_transitions: Log warnings for mode transitions
-            command_delay: Base delay between commands (seconds)
-            bulk_delay_multiplier: Multiplier for large payload delays
+            base_command_delay: Base delay between commands (seconds, default 0.0)
+            mode_transition_delay: Delay for mode changes (seconds, default 0.0)
+            initialization_delay: Delay for hardware initialization (seconds, default 0.2)
         """
         self.debug = debug
         self.auto_clear_mode_transitions = auto_clear_mode_transitions
         self.warn_on_mode_transitions = warn_on_mode_transitions
-        self.default_delay = command_delay
-        self.bulk_multiplier = bulk_delay_multiplier
+        self.base_command_delay = base_command_delay
+        self.mode_transition_delay = mode_transition_delay
+        self.initialization_delay = initialization_delay
         self._current_mode = DisplayMode.NORMAL
         self._active_windows = {}
         
@@ -142,7 +159,7 @@ class CD5220:
                 self.ser = serial_port
             
             time.sleep(0.1)
-            self._send_command(self.CMD_INITIALIZE, 0.2, "Initialize display")
+            self._send_command(self.CMD_INITIALIZE, "Initialize display", self.initialization_delay)
             self.restore_defaults()
             
         except (serial.SerialException, serial.SerialTimeoutException) as e:
@@ -152,18 +169,27 @@ class CD5220:
             logger.error(f"Initialization failed: {e}")
             raise CD5220DisplayError(f"Initialization failed: {e}")
 
-    def _send_command(self, command: bytes, delay: float = None, description: str = "Command") -> None:
-        """Send command with debug logging and adaptive timing."""
+    def _send_command(self, command: bytes, description: str = "Command", delay: float = None) -> None:
+        """
+        Send command with optional delay override.
+        
+        Args:
+            command: Command bytes to send
+            description: Debug description
+            delay: Override delay (None = use base_command_delay, 0.0 = no delay)
+        """
         try:
             if delay is None:
-                delay = self.default_delay * (1 + len(command) / 20 * self.bulk_multiplier)
+                delay = self.base_command_delay
             
             hex_str = ' '.join(f'{byte:02X}' for byte in command)
             logger.debug(f"Sending: {description} | Bytes: {hex_str} | Delay: {delay:.3f}s")
             
             self.ser.write(command)
             self.ser.flush()
-            time.sleep(delay)
+            
+            if delay > 0:
+                time.sleep(delay)
         except (serial.SerialException, serial.SerialTimeoutException) as e:
             logger.error(f"Command failed: {e}")
             raise CD5220DisplayError(f"Command failed: {e}")
@@ -184,8 +210,9 @@ class CD5220:
             'mode': self.current_mode.value,
             'auto_clear': self.auto_clear_mode_transitions,
             'warn_transitions': self.warn_on_mode_transitions,
-            'default_delay': self.default_delay,
-            'bulk_multiplier': self.bulk_multiplier,
+            'base_command_delay': self.base_command_delay,
+            'mode_transition_delay': self.mode_transition_delay,
+            'initialization_delay': self.initialization_delay,
             'active_windows': self.active_windows
         }
 
@@ -205,90 +232,96 @@ class CD5220:
                            f"Use clear_display() first or enable auto_clear_mode_transitions.")
             raise CD5220DisplayError(f"{operation} requires normal mode. Use clear_display() first.")
 
-    def _send_cursor_position_raw(self, col: int, row: int) -> None:
+    def _send_cursor_position_raw(self, col: int, row: int, delay: float = None) -> None:
         """Send cursor position command without mode checking."""
         cmd = self.CMD_CURSOR_POSITION + bytes([col, row])
-        self._send_command(cmd, 0.1, f"Raw cursor: ({col},{row})")
+        self._send_command(cmd, f"Raw cursor: ({col},{row})", delay)
 
-    def _write_text_raw(self, text: str) -> None:
+    def _write_text_raw(self, text: str, delay: float = None) -> None:
         """Send text without mode checking."""
-        self._send_command(text.encode('ascii', 'ignore'), None, f"Raw write: '{text}'")
+        self._send_command(text.encode('ascii', 'ignore'), f"Raw write: '{text}'", delay)
 
     # === MODE CONTROL ===
     
-    def clear_display(self) -> None:
+    def clear_display(self, delay: float = None) -> None:
         """Clear display and return to normal mode."""
-        self._send_command(self.CMD_CLEAR, 0.1, "Clear display")
+        self._send_command(self.CMD_CLEAR, "Clear display", delay)
         self._current_mode = DisplayMode.NORMAL
         self._active_windows = {}
 
-    def cancel_current_line(self) -> None:
+    def cancel_current_line(self, delay: float = None) -> None:
         """Cancel current line and return to normal mode."""
-        self._send_command(self.CMD_CANCEL, 0.1, "Cancel current line")
+        self._send_command(self.CMD_CANCEL, "Cancel current line", delay)
         self._current_mode = DisplayMode.NORMAL
 
-    def initialize(self) -> None:
+    def initialize(self, delay: float = None) -> None:
         """Initialize display and return to normal mode."""
-        self._send_command(self.CMD_INITIALIZE, 0.2, "Initialize display")
-        self._send_command(self.CMD_CLEAR, 0.1, "Clear after init")
+        init_delay = delay if delay is not None else self.initialization_delay
+        self._send_command(self.CMD_INITIALIZE, "Initialize display", init_delay)
+        self._send_command(self.CMD_CLEAR, "Clear after init", delay)
         self._current_mode = DisplayMode.NORMAL
         self._active_windows = {}
 
-    def restore_defaults(self) -> None:
+    def restore_defaults(self, delay: float = None) -> None:
         """Restore factory defaults: brightness 4, overwrite mode, cursor off."""
-        self.clear_display()
-        self.set_brightness(4)
-        self.set_overwrite_mode() 
-        self.cursor_off()
+        self.clear_display(delay)
+        self.set_brightness(4, delay)
+        self.set_overwrite_mode(delay) 
+        self.cursor_off(delay)
 
     # === NORMAL MODE METHODS ===
     
-    def set_overwrite_mode(self) -> None:
+    def set_overwrite_mode(self, delay: float = None) -> None:
         """Set overwrite mode (normal mode only)."""
         self._ensure_normal_mode("Overwrite mode")
-        self._send_command(self.CMD_OVERWRITE_MODE, 0.1, "Set overwrite mode")
+        mode_delay = delay if delay is not None else self.mode_transition_delay
+        self._send_command(self.CMD_OVERWRITE_MODE, "Set overwrite mode", mode_delay)
 
-    def set_vertical_scroll_mode(self) -> None:
+    def set_vertical_scroll_mode(self, delay: float = None) -> None:
         """Set vertical scroll mode (normal mode only)."""
         self._ensure_normal_mode("Vertical scroll mode")
-        self._send_command(self.CMD_VERTICAL_SCROLL, 0.1, "Set vertical scroll mode")
+        mode_delay = delay if delay is not None else self.mode_transition_delay
+        self._send_command(self.CMD_VERTICAL_SCROLL, "Set vertical scroll mode", mode_delay)
 
-    def set_horizontal_scroll_mode(self) -> None:
+    def set_horizontal_scroll_mode(self, delay: float = None) -> None:
         """Set horizontal scroll mode (normal mode only)."""
         self._ensure_normal_mode("Horizontal scroll mode")
-        self._send_command(self.CMD_HORIZONTAL_SCROLL, 0.1, "Set horizontal scroll mode")
+        mode_delay = delay if delay is not None else self.mode_transition_delay
+        self._send_command(self.CMD_HORIZONTAL_SCROLL, "Set horizontal scroll mode", mode_delay)
 
-    def set_brightness(self, level: int) -> None:
+    def set_brightness(self, level: int, delay: float = None) -> None:
         """
         Set display brightness (normal mode only).
         
         Args:
             level: Brightness level 1-4 (1=dimmest, 4=brightest)
+            delay: Optional delay override (for slow hardware)
         """
         if not 1 <= level <= 4:
             raise CD5220DisplayError(f"Invalid brightness level: {level} (must be 1-4)")
         
         self._ensure_normal_mode("Brightness control")
         cmd = self.CMD_BRIGHTNESS + bytes([level])
-        self._send_command(cmd, self.BRIGHTNESS_CHANGE_TIME, f"Set brightness: {level}")
+        self._send_command(cmd, f"Set brightness: {level}", delay)
 
-    def cursor_on(self) -> None:
+    def cursor_on(self, delay: float = None) -> None:
         """Enable cursor (normal mode only)."""
         self._ensure_normal_mode("Cursor control")
-        self._send_command(self.CMD_CURSOR_ON, 0.1, "Cursor on")
+        self._send_command(self.CMD_CURSOR_ON, "Cursor on", delay)
 
-    def cursor_off(self) -> None:
+    def cursor_off(self, delay: float = None) -> None:
         """Disable cursor (normal mode only)."""
         self._ensure_normal_mode("Cursor control")
-        self._send_command(self.CMD_CURSOR_OFF, 0.1, "Cursor off")
+        self._send_command(self.CMD_CURSOR_OFF, "Cursor off", delay)
 
-    def set_cursor_position(self, col: int, row: int) -> None:
+    def set_cursor_position(self, col: int, row: int, delay: float = None) -> None:
         """
         Set cursor position (normal mode only).
         
         Args:
             col: Column 1-20
             row: Row 1-2
+            delay: Optional delay override (for slow hardware)
         """
         if row not in (1, 2):
             raise CD5220DisplayError("Row must be 1 or 2")
@@ -296,56 +329,56 @@ class CD5220:
             raise CD5220DisplayError(f"Column must be 1-{self.DISPLAY_WIDTH}")
         
         self._ensure_normal_mode("Cursor positioning")
-        self._send_cursor_position_raw(col, row)
+        self._send_cursor_position_raw(col, row, delay)
 
-    def cursor_move_up(self) -> None:
+    def cursor_move_up(self, delay: float = None) -> None:
         """Move cursor up (normal mode only)."""
         self._ensure_normal_mode("Cursor movement")
-        self._send_command(self.CMD_CURSOR_UP, 0.1, "Cursor up")
+        self._send_command(self.CMD_CURSOR_UP, "Cursor up", delay)
 
-    def cursor_move_down(self) -> None:
+    def cursor_move_down(self, delay: float = None) -> None:
         """Move cursor down (normal mode only)."""
         self._ensure_normal_mode("Cursor movement")
-        self._send_command(self.CMD_CURSOR_DOWN, 0.1, "Cursor down")
+        self._send_command(self.CMD_CURSOR_DOWN, "Cursor down", delay)
 
-    def cursor_move_left(self) -> None:
+    def cursor_move_left(self, delay: float = None) -> None:
         """Move cursor left (normal mode only)."""
         self._ensure_normal_mode("Cursor movement")
-        self._send_command(self.CMD_CURSOR_LEFT, 0.1, "Cursor left")
+        self._send_command(self.CMD_CURSOR_LEFT, "Cursor left", delay)
 
-    def cursor_move_right(self) -> None:
+    def cursor_move_right(self, delay: float = None) -> None:
         """Move cursor right (normal mode only)."""
         self._ensure_normal_mode("Cursor movement")
-        self._send_command(self.CMD_CURSOR_RIGHT, 0.1, "Cursor right")
+        self._send_command(self.CMD_CURSOR_RIGHT, "Cursor right", delay)
 
-    def cursor_home(self) -> None:
+    def cursor_home(self, delay: float = None) -> None:
         """Move cursor to home position (1,1) (normal mode only)."""
         self._ensure_normal_mode("Cursor movement")
-        self._send_command(self.CMD_CURSOR_HOME, 0.1, "Cursor home")
+        self._send_command(self.CMD_CURSOR_HOME, "Cursor home", delay)
 
-    def write_at_cursor(self, text: str) -> None:
+    def write_at_cursor(self, text: str, delay: float = None) -> None:
         """Write text at current cursor position (normal mode only)."""
         self._ensure_normal_mode("Cursor writing")
-        self._write_text_raw(text)
+        self._write_text_raw(text, delay)
 
-    def write_positioned(self, text: str, col: int, row: int) -> None:
+    def write_positioned(self, text: str, col: int, row: int, delay: float = None) -> None:
         """Write text at specific position (normal mode only)."""
-        self.set_cursor_position(col, row)
-        self.write_at_cursor(text)
+        self.set_cursor_position(col, row, delay)
+        self.write_at_cursor(text, delay)
 
-    def display_on(self) -> None:
+    def display_on(self, delay: float = None) -> None:
         """Turn display on (normal mode only)."""
         self._ensure_normal_mode("Display control")
-        self._send_command(self.CMD_DISPLAY_ON, 0.1, "Display on")
+        self._send_command(self.CMD_DISPLAY_ON, "Display on", delay)
 
-    def display_off(self) -> None:
+    def display_off(self, delay: float = None) -> None:
         """Turn display off (normal mode only)."""
         self._ensure_normal_mode("Display control")
-        self._send_command(self.CMD_DISPLAY_OFF, 0.1, "Display off")
+        self._send_command(self.CMD_DISPLAY_OFF, "Display off", delay)
 
     # === STRING MODE METHODS ===
     
-    def write_upper_line(self, text: str) -> None:
+    def write_upper_line(self, text: str, delay: float = None) -> None:
         """
         Write to upper line using fast string mode (ESC Q A).
         
@@ -354,31 +387,45 @@ class CD5220:
         
         Args:
             text: Text to display (truncated to 20 chars if longer)
+            delay: Optional delay override (for slow hardware)
         """
         if len(text) > self.DISPLAY_WIDTH:
             text = text[:self.DISPLAY_WIDTH]
         padded_text = text.ljust(self.DISPLAY_WIDTH)
         cmd = self.CMD_STRING_UPPER + padded_text.encode('ascii', 'ignore') + b'\x0D'
-        self._send_command(cmd, None, f"String upper: '{text}'")
+        self._send_command(cmd, f"String upper: '{text}'", delay)
         self._current_mode = DisplayMode.STRING
 
-    def write_lower_line(self, text: str) -> None:
-        """Write to lower line using fast string mode (ESC Q B)."""
+    def write_lower_line(self, text: str, delay: float = None) -> None:
+        """
+        Write to lower line using fast string mode (ESC Q B).
+        
+        Args:
+            text: Text to display (truncated to 20 chars if longer)
+            delay: Optional delay override (for slow hardware)
+        """
         if len(text) > self.DISPLAY_WIDTH:
             text = text[:self.DISPLAY_WIDTH]
         padded_text = text.ljust(self.DISPLAY_WIDTH)
         cmd = self.CMD_STRING_LOWER + padded_text.encode('ascii', 'ignore') + b'\x0D'
-        self._send_command(cmd, None, f"String lower: '{text}'")
+        self._send_command(cmd, f"String lower: '{text}'", delay)
         self._current_mode = DisplayMode.STRING
 
-    def write_both_lines(self, upper: str, lower: str) -> None:
-        """Write to both lines using string mode."""
-        self.write_upper_line(upper)
-        self.write_lower_line(lower)
+    def write_both_lines(self, upper: str, lower: str, delay: float = None) -> None:
+        """
+        Write to both lines using string mode.
+        
+        Args:
+            upper: Text for upper line
+            lower: Text for lower line
+            delay: Optional delay override (for slow hardware)
+        """
+        self.write_upper_line(upper, delay)
+        self.write_lower_line(lower, delay)
 
     # === CONTINUOUS SCROLLING METHODS ===
     
-    def scroll_marquee(self, text: str, observe_duration: float = None) -> None:
+    def scroll_marquee(self, text: str, observe_duration: float = None, delay: float = None) -> None:
         """
         Start continuous marquee scrolling on upper line (ESC Q D).
         
@@ -387,9 +434,10 @@ class CD5220:
         Args:
             text: Text to scroll
             observe_duration: Recommended viewing time
+            delay: Optional delay override (for slow hardware)
         """
         cmd = self.CMD_SCROLL_MARQUEE + text.encode('ascii', 'ignore') + b'\x0D'
-        self._send_command(cmd, None, f"Scroll marquee: '{text}'")
+        self._send_command(cmd, f"Scroll marquee: '{text}'", delay)
         self._current_mode = DisplayMode.SCROLL
         
         if observe_duration is None:
@@ -399,7 +447,7 @@ class CD5220:
 
     # === WINDOW MANAGEMENT METHODS ===
     
-    def set_window(self, line: int, start_col: int, end_col: int) -> None:
+    def set_window(self, line: int, start_col: int, end_col: int, delay: float = None) -> None:
         """
         Set window range for viewport mode (normal mode only).
         
@@ -409,6 +457,7 @@ class CD5220:
             line: Line number (1 or 2)
             start_col: Starting column (1-20) - writing begins here
             end_col: Ending column (start_col to 20) - writing ends here
+            delay: Optional delay override (for slow hardware)
         """
         if line not in (1, 2):
             raise CD5220DisplayError("Line must be 1 or 2")
@@ -420,12 +469,12 @@ class CD5220:
         # Convert from 1-based API coordinates to 0-based hardware coordinates
         hw_start_col = start_col - 1
         hw_end_col = end_col - 1
-
+        
         cmd = self.CMD_WINDOW_SET + bytes([1, hw_start_col, hw_end_col, line])
-        self._send_command(cmd, 0.1, f"Set window: line {line}, cols {start_col}-{end_col}")
+        self._send_command(cmd, f"Set window: line {line}, cols {start_col}-{end_col}", delay)
         self._active_windows[line] = (start_col, end_col)  # Store API coordinates for consistency
 
-    def clear_window(self, line: int) -> None:
+    def clear_window(self, line: int, delay: float = None) -> None:
         """Clear window range for specified line (normal mode only)."""
         if line not in (1, 2):
             raise CD5220DisplayError("Line must be 1 or 2")
@@ -433,35 +482,38 @@ class CD5220:
         self._ensure_normal_mode("Window management")
         
         cmd = self.CMD_WINDOW_SET + bytes([0, 0, 0, line])
-        self._send_command(cmd, 0.1, f"Clear window: line {line}")
+        self._send_command(cmd, f"Clear window: line {line}", delay)
         
         if line in self._active_windows:
             del self._active_windows[line]
 
-    def clear_all_windows(self) -> None:
+    def clear_all_windows(self, delay: float = None) -> None:
         """Clear all window ranges (normal mode only)."""
         self._ensure_normal_mode("Window management")
         
         for line in [1, 2]:
             if line in self._active_windows:
-                self.clear_window(line)
+                self.clear_window(line, delay)
 
-    def enter_viewport_mode(self) -> None:
+    def enter_viewport_mode(self, delay: float = None) -> None:
         """
         Enter viewport mode for window-constrained display.
         
         Requires windows to be set first using set_window().
+        
+        Args:
+            delay: Optional delay override (for slow hardware)
         """
         if not self._active_windows:
             raise CD5220DisplayError("No windows configured. Use set_window() first.")
         
         self._ensure_normal_mode("Viewport mode entry")
-        self.set_horizontal_scroll_mode()
+        self.set_horizontal_scroll_mode(delay)
         self._current_mode = DisplayMode.VIEWPORT
         
         logger.info(f"Entered viewport mode with windows: {self._active_windows}")
 
-    def write_viewport(self, line: int, text: str, char_delay: float = None) -> None:
+    def write_viewport(self, line: int, text: str, char_delay: float = None, delay: float = None) -> None:
         """
         Write text to viewport window with optional smooth character building.
         
@@ -470,6 +522,7 @@ class CD5220:
             text: Text to write
             char_delay: If None, writes all text at once (fast).
                        If specified, writes character-by-character with delay (smooth building effect).
+            delay: Optional delay override for positioning commands (for slow hardware)
         """
         if self._current_mode != DisplayMode.VIEWPORT:
             raise CD5220DisplayError("Must be in viewport mode. Use enter_viewport_mode() first.")
@@ -481,49 +534,57 @@ class CD5220:
         
         if char_delay is None:
             # Fast mode: write entire text at once (original behavior)
-            self._send_cursor_position_raw(start_col, line)
-            self._write_text_raw(text)
+            self._send_cursor_position_raw(start_col, line, delay)
+            self._write_text_raw(text, delay)
             logger.debug(f"Viewport write: line {line}, window {start_col}-{end_col}, text: '{text}'")
         else:
             # Smooth mode: character-by-character building with hardware cursor management
-            self._send_cursor_position_raw(start_col, line)
+            self._send_cursor_position_raw(start_col, line, delay)
             logger.debug(f"Viewport incremental write: line {line}, window {start_col}-{end_col}, text: '{text}'")
 
             for char in text:
-                self._write_text_raw(char)
+                self._write_text_raw(char, delay)
                 time.sleep(char_delay)
 
     # === FONT CONTROL ===
     
-    def set_international_font(self, font_id: int) -> None:
+    def set_international_font(self, font_id: int, delay: float = None) -> None:
         """Set international font (normal mode only)."""
         self._ensure_normal_mode("Font selection")
         cmd = self.CMD_INTERNATIONAL_FONT + bytes([font_id])
-        self._send_command(cmd, 0.1, f"Set international font: {font_id}")
+        self._send_command(cmd, f"Set international font: {font_id}", delay)
 
-    def set_extended_font(self, font_id: int) -> None:
+    def set_extended_font(self, font_id: int, delay: float = None) -> None:
         """Set extended font (normal mode only)."""
         self._ensure_normal_mode("Font selection")
         cmd = self.CMD_EXTENDED_FONT + bytes([font_id])
-        self._send_command(cmd, 0.1, f"Set extended font: {font_id}")
+        self._send_command(cmd, f"Set extended font: {font_id}", delay)
 
     # === CONVENIENCE METHODS ===
     
-    def display_message(self, message: str, duration: float = 2.0, mode: str = "string") -> None:
-        """Display a message with automatic line wrapping."""
+    def display_message(self, message: str, duration: float = 2.0, mode: str = "string", delay: float = None) -> None:
+        """
+        Display a message with automatic line wrapping.
+        
+        Args:
+            message: Message to display
+            duration: How long to show the message
+            mode: Display mode ("string" or "normal")
+            delay: Optional delay override (for slow hardware)
+        """
         lines = [message[i:i+self.DISPLAY_WIDTH] for i in range(0, len(message), self.DISPLAY_WIDTH)]
         
         if mode == "string":
             if len(lines) >= 1:
-                self.write_upper_line(lines[0])
+                self.write_upper_line(lines[0], delay)
             if len(lines) >= 2:
-                self.write_lower_line(lines[1])
+                self.write_lower_line(lines[1], delay)
         else:  # normal mode
-            self.clear_display()
+            self.clear_display(delay)
             if len(lines) >= 1:
-                self.write_positioned(lines[0], 1, 1)
+                self.write_positioned(lines[0], 1, 1, delay)
             if len(lines) >= 2:
-                self.write_positioned(lines[1], 1, 2)
+                self.write_positioned(lines[1], 1, 2, delay)
         
         time.sleep(duration)
 
