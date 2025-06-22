@@ -12,9 +12,14 @@ Demonstrates all documented modes and features with proper test isolation:
 
 import time
 import logging
-import serial
+from cd5220 import serial
 import argparse
-from cd5220 import CD5220, CD5220DisplayError, DisplayMode
+from cd5220 import (
+    CD5220,
+    CD5220DisplayError,
+    DisplayMode,
+    CD5220ASCIIAnimations,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -306,6 +311,21 @@ def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
     
     fixture.pause_for_observation("Rapid updates complete", fixture.STEP_PAUSE)
 
+
+@isolated_demo("ASCII ANIM")
+def demo_ascii_animations(display: CD5220, fixture: CD5220DemoFixture):
+    """Demonstrate ASCII animation library."""
+
+    animations = CD5220ASCIIAnimations(display, sleep_fn=lambda _ : None)
+
+    fixture.show_banner("ASCII ANIMATIONS", "STARTUP")
+    animations.play_startup_sequence()
+    fixture.pause_for_observation("Startup sequence", fixture.STEP_PAUSE)
+
+    fixture.show_banner("DEMO CYCLE", "ANIMATIONS")
+    animations.play_demo_cycle()
+    fixture.pause_for_observation("Cycle complete", fixture.STEP_PAUSE)
+
 def run_comprehensive_demo(display: CD5220, config):
     """Run comprehensive demo with balanced feature coverage."""
     logger.info("=== CD5220 COMPREHENSIVE DEMO ===")
@@ -330,6 +350,9 @@ def run_comprehensive_demo(display: CD5220, config):
         ],
         'convenience': [
             demo_convenience_features
+        ],
+        'ascii': [
+            demo_ascii_animations
         ]
     }
     
@@ -365,7 +388,7 @@ def main():
                        help='Baud rate (default: 9600)')
     parser.add_argument('--fast', action='store_true', 
                        help='Reduce delays for experienced users')
-    parser.add_argument('--demo', choices=['all', 'core', 'scrolling', 'config', 'convenience'], 
+    parser.add_argument('--demo', choices=['all', 'core', 'scrolling', 'config', 'convenience', 'ascii'],
                        default='all', help='Run specific demo suite')
     parser.add_argument('--auto-advance', action='store_true',
                        help='Auto-advance between demos')

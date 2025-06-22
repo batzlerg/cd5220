@@ -9,7 +9,7 @@ Python library for controlling VFD (Vacuum Fluorescent Display) hardware which r
 Controls 2×20 character VFD displays with features including:
 - Smart mode management with automatic transitions
 - Continuous marquee scrolling (upper line only)
-- Viewport overflow scrolling with window constraints  
+- Viewport overflow scrolling with a single window constraint
 - Fast string writing modes
 - CD5220 command set support, RS232 serial connection (default 9600 baud, 8N1)
 
@@ -69,7 +69,7 @@ with CD5220('/dev/ttyUSB0') as display:
     display.write_positioned("ID: [", 1, 1)
     display.write_positioned("]", 16, 1)
 
-    # set up constrained window
+    # set up constrained window (only one can be active)
     display.set_window(1, 5, 15)  # columns 5-15
     display.enter_viewport_mode()
     display.write_viewport(1, "VERY_LONG_IDENTIFIER_NAME")
@@ -88,6 +88,17 @@ with CD5220('/dev/ttyUSB0') as display:
     time.sleep(2)
     display.write_lower_line("PRICE: $2.99")  # quick update
 ```
+### ASCII animations
+```python
+from cd5220 import CD5220ASCIIAnimations
+
+with CD5220('/dev/ttyUSB0') as display:
+    # Disable character delays but keep frame timing
+    animations = CD5220ASCIIAnimations(display, sleep_fn=lambda _ : None)
+    animations.play_startup_sequence()
+    # For custom frame timing pass frame_sleep_fn
+    # Animations update the display using minimal diffed writes
+```
 
 ## Testing
 
@@ -98,6 +109,7 @@ python -m pytest tests/ -v
 # Hardware demo
 python demo.py --port /dev/ttyUSB0 --demo all
 python demo.py --port /dev/ttyUSB0 --demo scrolling --fast
+python demo.py --port /dev/ttyUSB0 --demo ascii
 ```
 
 ## Features Not Yet Implemented

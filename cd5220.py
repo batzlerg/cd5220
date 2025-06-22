@@ -5,7 +5,30 @@ Python interface for CD5220 VFD displays with smart mode management.
 Supports string mode, continuous scrolling, and window-constrained viewport operations.
 """
 
-import serial
+try:  # use real pyserial if available
+    import serial  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback for test env
+    from types import SimpleNamespace
+
+    class SerialException(Exception):
+        """Basic replacement for pyserial's SerialException."""
+        pass
+
+    class SerialTimeoutException(SerialException):
+        """Timeout exception matching pyserial's interface."""
+        pass
+
+    class Serial:  # type: ignore
+        def __init__(self, port, *args, **kwargs):
+            raise SerialException(
+                f"[Errno 2] could not open port {port}: [Errno 2] No such file or directory: '{port}'"
+            )
+
+    serial = SimpleNamespace(
+        Serial=Serial,
+        SerialException=SerialException,
+        SerialTimeoutException=SerialTimeoutException,
+    )
 import time
 import logging
 from typing import Union, Optional, Dict, Any, Tuple
@@ -136,7 +159,9 @@ class CD5220:
         self.mode_transition_delay = mode_transition_delay
         self.initialization_delay = initialization_delay
         self._current_mode = DisplayMode.NORMAL
-        self._active_windows = {}
+        # The hardware supports only one active window configuration
+        # at a time, tracked as (line, start_col, end_col)
+        self._active_window: Optional[Tuple[int, int, int]] = None
         
         if debug:
             logger.setLevel(logging.DEBUG)
@@ -200,9 +225,9 @@ class CD5220:
         return self._current_mode
 
     @property
-    def active_windows(self) -> Dict[int, Tuple[int, int]]:
-        """Get currently active window configurations."""
-        return self._active_windows.copy()
+    def active_window(self) -> Optional[Tuple[int, int, int]]:
+        """Return the currently configured window as (line, start, end)."""
+        return self._active_window
 
     def get_display_info(self) -> Dict[str, Any]:
         """Return current display state information."""
@@ -213,7 +238,7 @@ class CD5220:
             'base_command_delay': self.base_command_delay,
             'mode_transition_delay': self.mode_transition_delay,
             'initialization_delay': self.initialization_delay,
-            'active_windows': self.active_windows
+            'active_window': self.active_window
         }
 
     def _ensure_normal_mode(self, operation: str, force_clear: bool = False) -> bool:
@@ -247,7 +272,7 @@ class CD5220:
         """Clear display and return to normal mode."""
         self._send_command(self.CMD_CLEAR, "Clear display", delay)
         self._current_mode = DisplayMode.NORMAL
-        self._active_windows = {}
+        self._active_window = None
 
     def cancel_current_line(self, delay: float = None) -> None:
         """Cancel current line and return to normal mode."""
@@ -260,7 +285,7 @@ class CD5220:
         self._send_command(self.CMD_INITIALIZE, "Initialize display", init_delay)
         self._send_command(self.CMD_CLEAR, "Clear after init", delay)
         self._current_mode = DisplayMode.NORMAL
-        self._active_windows = {}
+        self._active_window = None
 
     def restore_defaults(self, delay: float = None) -> None:
         """Restore factory defaults: brightness 4, overwrite mode, cursor off."""
@@ -471,29 +496,25 @@ class CD5220:
         hw_end_col = end_col - 1
         
         cmd = self.CMD_WINDOW_SET + bytes([1, hw_start_col, hw_end_col, line])
-        self._send_command(cmd, f"Set window: line {line}, cols {start_col}-{end_col}", delay)
-        self._active_windows[line] = (start_col, end_col)  # Store API coordinates for consistency
+        self._send_command(
+            cmd,
+            f"Set window: line {line}, cols {start_col}-{end_col}",
+            delay,
+        )
+        self._active_window = (line, start_col, end_col)
 
-    def clear_window(self, line: int, delay: float = None) -> None:
-        """Clear window range for specified line (normal mode only)."""
+    def clear_window(self, line: int = 1, delay: float = None) -> None:
+        """Clear the active window (normal mode only)."""
         if line not in (1, 2):
             raise CD5220DisplayError("Line must be 1 or 2")
-        
+
         self._ensure_normal_mode("Window management")
-        
+
         cmd = self.CMD_WINDOW_SET + bytes([0, 0, 0, line])
         self._send_command(cmd, f"Clear window: line {line}", delay)
-        
-        if line in self._active_windows:
-            del self._active_windows[line]
 
-    def clear_all_windows(self, delay: float = None) -> None:
-        """Clear all window ranges (normal mode only)."""
-        self._ensure_normal_mode("Window management")
-        
-        for line in [1, 2]:
-            if line in self._active_windows:
-                self.clear_window(line, delay)
+        self._active_window = None
+
 
     def enter_viewport_mode(self, delay: float = None) -> None:
         """
@@ -504,16 +525,25 @@ class CD5220:
         Args:
             delay: Optional delay override (for slow hardware)
         """
-        if not self._active_windows:
+        if self._active_window is None:
             raise CD5220DisplayError("No windows configured. Use set_window() first.")
         
         self._ensure_normal_mode("Viewport mode entry")
         self.set_horizontal_scroll_mode(delay)
         self._current_mode = DisplayMode.VIEWPORT
         
-        logger.info(f"Entered viewport mode with windows: {self._active_windows}")
+        logger.info(
+            f"Entered viewport mode with window: line {self._active_window[0]},"
+            f" cols {self._active_window[1]}-{self._active_window[2]}"
+        )
 
-    def write_viewport(self, line: int, text: str, char_delay: float = None, delay: float = None) -> None:
+    def write_viewport(
+        self,
+        line: int,
+        text: str,
+        char_delay: float = None,
+        delay: float = None,
+    ) -> None:
         """
         Write text to viewport window with optional smooth character building.
         
@@ -527,10 +557,10 @@ class CD5220:
         if self._current_mode != DisplayMode.VIEWPORT:
             raise CD5220DisplayError("Must be in viewport mode. Use enter_viewport_mode() first.")
         
-        if line not in self._active_windows:
+        if not self._active_window or self._active_window[0] != line:
             raise CD5220DisplayError(f"No window configured for line {line}")
-        
-        start_col, end_col = self._active_windows[line]
+
+        start_col, end_col = self._active_window[1], self._active_window[2]
         
         if char_delay is None:
             # Fast mode: write entire text at once (original behavior)
@@ -602,3 +632,308 @@ class CD5220:
 
     def __exit__(self, exc_type, exc_val, exc_tb):
         self.close()
+
+# ---------------------------------------------------------------------------
+# Optional ASCII animation helpers
+# ---------------------------------------------------------------------------
+
+import math
+import random
+from typing import List
+
+
+class ASCIIAnimator:
+    """Low level frame buffer animator for CD5220 with diffed updates."""
+
+    def __init__(
+        self,
+        display: 'CD5220',
+        frame_rate: float = 4,
+        sleep_fn: callable = time.sleep,
+        frame_sleep_fn: callable = time.sleep,
+        diff_threshold: int = 10,
+    ) -> None:
+        self.display = display
+        self.frame_buffer: List[List[str]] = [[' '] * 20 for _ in range(2)]
+        self._last_frame: List[List[str]] = [[' '] * 20 for _ in range(2)]
+        self.frame_rate = frame_rate
+        self.sleep_fn = sleep_fn
+        self.frame_sleep_fn = frame_sleep_fn
+        self.diff_threshold = diff_threshold
+
+    def sleep(self, seconds: float) -> None:
+        """Delay for non-frame operations (skippable)."""
+        if seconds > 0 and self.sleep_fn is not None:
+            self.sleep_fn(seconds)
+
+    def frame_sleep(self, seconds: float) -> None:
+        """Delay controlling overall frame timing."""
+        if seconds > 0 and self.frame_sleep_fn is not None:
+            self.frame_sleep_fn(seconds)
+
+    def clear_buffer(self) -> None:
+        self.frame_buffer = [[' '] * 20 for _ in range(2)]
+
+    def reset_tracking(self) -> None:
+        """Reset internal diff tracking."""
+        self._last_frame = [[' '] * 20 for _ in range(2)]
+
+    def set_char(self, x: int, y: int, char: str) -> None:
+        if 0 <= x < 20 and 0 <= y < 2:
+            self.frame_buffer[y][x] = char
+
+    def render_frame(self) -> None:
+        changes = []
+        for y in range(2):
+            for x in range(20):
+                char = self.frame_buffer[y][x]
+                if char != self._last_frame[y][x]:
+                    changes.append((x, y, char))
+                    self._last_frame[y][x] = char
+
+        if len(changes) >= self.diff_threshold:
+            line1 = ''.join(self.frame_buffer[0])
+            line2 = ''.join(self.frame_buffer[1])
+            self.display.write_both_lines(line1, line2)
+        else:
+            for x, y, char in changes:
+                self.display.write_positioned(char, x + 1, y + 1)
+
+
+def bouncing_ball_animation(animator: ASCIIAnimator, duration: float = 10.0) -> None:
+    """Bouncing ball using minimal character updates."""
+    ball_x, ball_y = 0, 0
+    vel_x, vel_y = 1, 1
+    frame_count = int(duration * animator.frame_rate)
+
+    # draw static floor once
+    for x in range(20):
+        animator.set_char(x, 1, '_')
+    animator.set_char(ball_x, ball_y, '*')
+    animator.render_frame()
+
+    for _ in range(frame_count):
+        prev_x, prev_y = ball_x, ball_y
+        ball_x += vel_x
+        ball_y += vel_y
+
+        if ball_x <= 0 or ball_x >= 19:
+            vel_x = -vel_x
+            ball_x = max(0, min(ball_x, 19))
+        if ball_y <= 0 or ball_y >= 1:
+            vel_y = -vel_y
+            ball_y = max(0, min(ball_y, 1))
+
+        # restore previous char
+        animator.set_char(prev_x, prev_y, '_' if prev_y == 1 else ' ')
+        animator.set_char(ball_x, ball_y, '*')
+        animator.render_frame()
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+
+def progress_bar_animation(animator: ASCIIAnimator, duration: float = 8.0) -> None:
+    """Animated progress bar with diffed updates."""
+    steps = 10
+    step_duration = duration / steps
+
+    # draw static template
+    for i, ch in enumerate("LOADING "):
+        animator.set_char(i, 0, ch)
+    animator.set_char(11, 0, '%')
+    for i, ch in enumerate("    [          ]    "):
+        animator.set_char(i, 1, ch)
+    animator.render_frame()
+
+    for step in range(steps + 1):
+        progress = step / steps
+        filled = int(progress * 10)
+        percentage = f"{int(progress * 100):03d}"
+
+        for i, ch in enumerate(percentage):
+            animator.set_char(8 + i, 0, ch)
+        for i in range(10):
+            animator.set_char(5 + i, 1, '=' if i < filled else ' ')
+        animator.render_frame()
+        animator.frame_sleep(step_duration)
+
+    animator.display.write_both_lines('     COMPLETE!     ', '    [==========]    ')
+
+
+def spinning_loader(animator: ASCIIAnimator, duration: float = 6.0) -> None:
+    """Spinner animation using a one-character viewport."""
+    spinner_chars = ['|', '/', '-', '\\']
+    frame_count = int(duration * animator.frame_rate)
+
+    display = animator.display
+
+    text = "  Processing "
+    line1 = text.ljust(20)
+    line2 = "   Please wait...   "
+
+    display.write_both_lines(line1, line2)
+
+    spinner_col = len(text) + 1  # 1-based column after static text
+    display.set_window(1, spinner_col, spinner_col)
+    display.enter_viewport_mode()
+
+    for frame in range(frame_count):
+        display.write_viewport(1, spinner_chars[frame % len(spinner_chars)])
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+    display.cancel_current_line()
+    display.clear_window()
+
+
+def wave_animation(animator: ASCIIAnimator, duration: float = 8.0) -> None:
+    """Undulating wave pattern using diffed updates."""
+    frame_count = int(duration * animator.frame_rate)
+
+    for x in range(20):
+        animator.set_char(x, 0, '~')
+        animator.set_char(x, 1, '~')
+    animator.render_frame()
+
+    for frame in range(frame_count):
+        phase = frame * 0.5
+        for x in range(20):
+            wave_val = math.sin((x + phase) * 0.3)
+            if wave_val > 0.3:
+                animator.set_char(x, 0, '^')
+                animator.set_char(x, 1, ' ')
+            elif wave_val < -0.3:
+                animator.set_char(x, 0, ' ')
+                animator.set_char(x, 1, 'v')
+            else:
+                animator.set_char(x, 0, '~')
+                animator.set_char(x, 1, '~')
+        animator.render_frame()
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+
+def matrix_rain_animation(animator: ASCIIAnimator, duration: float = 12.0) -> None:
+    columns = []
+    for _ in range(20):
+        columns.append({'chars': [], 'speed': random.choice([1, 2, 3]), 'next_spawn': random.randint(0, 10)})
+
+    frame_count = int(duration * animator.frame_rate)
+    chars = '01ABCDEF'
+
+    for _ in range(frame_count):
+        # fill with spaces so diff only updates changed positions
+        for x in range(20):
+            animator.set_char(x, 0, ' ')
+            animator.set_char(x, 1, ' ')
+        for col_idx, column in enumerate(columns):
+            if column['next_spawn'] <= 0:
+                column['chars'].append({'char': random.choice(chars), 'y': -1})
+                column['next_spawn'] = random.randint(3, 8)
+            column['next_spawn'] -= 1
+
+            for char_data in column['chars'][:]:
+                char_data['y'] += 1
+                if char_data['y'] >= 2:
+                    column['chars'].remove(char_data)
+                elif 0 <= char_data['y'] < 2:
+                    animator.set_char(col_idx, char_data['y'], char_data['char'])
+        animator.render_frame()
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+
+def typewriter_animation(animator: ASCIIAnimator, text: str, line: int = 0) -> None:
+    row = 0 if line == 0 else 1
+    for i, ch in enumerate(text):
+        animator.display.write_positioned(ch, i + 1, row + 1)
+        animator.sleep(0.1)
+
+    cursor_col = len(text) + 1
+    for blink in range(6):
+        cursor = '_' if blink % 2 == 0 else ' '
+        animator.display.write_positioned(cursor, cursor_col, row + 1)
+        animator.frame_sleep(0.3)
+
+
+def pulsing_alert(animator: ASCIIAnimator, message: str, duration: float = 6.0) -> None:
+    """Pulse brightness while keeping text static."""
+    pulse_count = int(duration * 2)
+    centered = message.center(20)
+    animator.display.write_both_lines(centered, centered)
+    for pulse in range(pulse_count):
+        brightness = 4 if pulse % 2 == 0 else 1
+        animator.display.set_brightness(brightness)
+        animator.frame_sleep(0.5)
+    animator.display.set_brightness(4)
+
+
+class CD5220ASCIIAnimations:
+    """High level ASCII animation wrapper."""
+
+    def __init__(
+        self,
+        display: 'CD5220',
+        frame_rate: float = 4,
+        sleep_fn: callable = time.sleep,
+        frame_sleep_fn: callable = time.sleep,
+    ) -> None:
+        self.display = display
+        self.animator = ASCIIAnimator(
+            display,
+            frame_rate=frame_rate,
+            sleep_fn=sleep_fn,
+            frame_sleep_fn=frame_sleep_fn,
+        )
+        self.animator.reset_tracking()
+
+    def bouncing_ball_animation(self, duration: float = 10.0) -> None:
+        bouncing_ball_animation(self.animator, duration)
+
+    def progress_bar_animation(self, duration: float = 8.0) -> None:
+        progress_bar_animation(self.animator, duration)
+
+    def spinning_loader(self, duration: float = 6.0) -> None:
+        spinning_loader(self.animator, duration)
+
+    def wave_animation(self, duration: float = 8.0) -> None:
+        wave_animation(self.animator, duration)
+
+    def matrix_rain_animation(self, duration: float = 12.0) -> None:
+        matrix_rain_animation(self.animator, duration)
+
+    def typewriter_animation(self, text: str, line: int = 0) -> None:
+        typewriter_animation(self.animator, text, line)
+
+    def pulsing_alert(self, message: str, duration: float = 6.0) -> None:
+        pulsing_alert(self.animator, message, duration)
+
+    def play_startup_sequence(self) -> None:
+        self.typewriter_animation("CD5220 STARTING...", line=0)
+        self.animator.frame_sleep(1)
+        self.progress_bar_animation(duration=4)
+        self.animator.frame_sleep(0.5)
+        self.matrix_rain_animation(duration=3)
+        self.pulsing_alert("READY!", duration=2)
+
+    def play_demo_cycle(self) -> None:
+        animations = [
+            ("Bouncing Ball", lambda: self.bouncing_ball_animation(duration=5)),
+            ("Wave Motion", lambda: self.wave_animation(duration=5)),
+            ("Matrix Rain", lambda: self.matrix_rain_animation(duration=5)),
+            ("Spinner", lambda: self.spinning_loader(duration=3)),
+            ("Progress Bar", lambda: self.progress_bar_animation(duration=4)),
+        ]
+        for name, func in animations:
+            self.typewriter_animation(name, line=0)
+            self.animator.frame_sleep(1)
+            func()
+            self.animator.frame_sleep(1)
+
+    def play_error_alert(self, error_message: str) -> None:
+        for flash in range(6):
+            if flash % 2 == 0:
+                border = '*' * 20
+                self.display.write_both_lines(border, border)
+            else:
+                centered = error_message[:18].center(20)
+                self.display.write_both_lines(centered, ' ' * 20)
+            self.animator.frame_sleep(0.3)
+        self.pulsing_alert(error_message[:20], duration=3)
+

@@ -7,7 +7,7 @@ window management, and error handling.
 """
 
 import pytest
-import serial
+from cd5220 import serial
 import time
 from unittest.mock import Mock, patch, MagicMock
 from cd5220 import CD5220, DisplayMode, CD5220DisplayError
@@ -18,7 +18,7 @@ class TestCD5220Unit:
     @pytest.fixture
     def mock_display(self):
         """Create a CD5220 instance with mocked serial connection."""
-        with patch('serial.Serial') as mock_serial:
+        with patch('cd5220.serial.Serial') as mock_serial:
             mock_serial.return_value.is_open = True
             display = CD5220('mock_port', debug=False)
             display.ser = mock_serial.return_value
@@ -32,11 +32,11 @@ class TestCD5220Unit:
         assert mock_display.base_command_delay == 0.0
         assert mock_display.mode_transition_delay == 0.0
         assert mock_display.initialization_delay == 0.2
-        assert mock_display.active_windows == {}
+        assert mock_display.active_window is None
     
     def test_custom_initialization_parameters(self):
         """Test initialization with custom delay parameters."""
-        with patch('serial.Serial') as mock_serial:
+        with patch('cd5220.serial.Serial') as mock_serial:
             mock_serial.return_value.is_open = True
             display = CD5220('mock_port', 
                             debug=False,
@@ -132,19 +132,17 @@ class TestCD5220Unit:
         """Test window management with 1-based indexing consistency."""
         # Test valid window setting with 1-based coordinates
         mock_display.set_window(1, 5, 15)
-        assert 1 in mock_display.active_windows
-        assert mock_display.active_windows[1] == (5, 15)
-        
+        assert mock_display.active_window == (1, 5, 15)
+
         mock_display.set_window(2, 3, 18)
-        assert 2 in mock_display.active_windows
-        assert mock_display.active_windows[2] == (3, 18)
+        assert mock_display.active_window == (2, 3, 18)
         
         # Test edge cases for 1-based indexing
         mock_display.set_window(1, 1, 20)  # Full width window
-        assert mock_display.active_windows[1] == (1, 20)
-        
+        assert mock_display.active_window == (1, 1, 20)
+
         mock_display.set_window(2, 10, 10)  # Single character window
-        assert mock_display.active_windows[2] == (10, 10)
+        assert mock_display.active_window == (2, 10, 10)
         
         # Test window parameter validation
         with pytest.raises(CD5220DisplayError, match="Line must be 1 or 2"):
@@ -161,11 +159,7 @@ class TestCD5220Unit:
         
         # Test window clearing
         mock_display.clear_window(1)
-        assert 1 not in mock_display.active_windows
-        assert 2 in mock_display.active_windows  # Other window should remain
-        
-        mock_display.clear_all_windows()
-        assert mock_display.active_windows == {}
+        assert mock_display.active_window is None
     
     def test_consolidated_viewport_writing(self, mock_display):
         """Test consolidated write_viewport method with optional char_delay."""
@@ -231,7 +225,7 @@ class TestCD5220Unit:
         # Should auto-clear from viewport mode too
         mock_display.cursor_on()
         assert mock_display.current_mode == DisplayMode.NORMAL
-        assert mock_display.active_windows == {}  # Windows should be cleared
+        assert mock_display.active_window is None  # Window should be cleared
     
     def test_manual_mode_control_disabled(self, mock_display):
         """Test manual mode control when auto-clear is disabled."""
@@ -271,8 +265,15 @@ class TestCD5220Unit:
         """Test display info reporting."""
         info = mock_display.get_display_info()
         
-        expected_keys = ['mode', 'auto_clear', 'warn_transitions', 'base_command_delay', 
-                        'mode_transition_delay', 'initialization_delay', 'active_windows']
+        expected_keys = [
+            'mode',
+            'auto_clear',
+            'warn_transitions',
+            'base_command_delay',
+            'mode_transition_delay',
+            'initialization_delay',
+            'active_window',
+        ]
         for key in expected_keys:
             assert key in info
         
@@ -282,7 +283,7 @@ class TestCD5220Unit:
         assert isinstance(info['base_command_delay'], float)
         assert isinstance(info['mode_transition_delay'], float)
         assert isinstance(info['initialization_delay'], float)
-        assert isinstance(info['active_windows'], dict)
+        assert info['active_window'] is None or isinstance(info['active_window'], tuple)
     
     def test_restore_defaults_method(self, mock_display):
         """Test restore_defaults method with correct state management."""
@@ -293,12 +294,12 @@ class TestCD5220Unit:
         # set_window requires normal mode, so it auto-clears and mode becomes NORMAL
         mock_display.set_window(1, 5, 15)
         assert mock_display.current_mode == DisplayMode.NORMAL  # Mode is now NORMAL due to auto-clear
-        assert mock_display.active_windows != {}  # But windows are set
+        assert mock_display.active_window is not None  # Window was configured
         
         # Restore defaults should clear everything
         mock_display.restore_defaults()
         assert mock_display.current_mode == DisplayMode.NORMAL
-        assert mock_display.active_windows == {}
+        assert mock_display.active_window is None
     
     def test_send_command_delay_override(self, mock_display):
         """Test _send_command delay override system."""
@@ -358,7 +359,7 @@ class TestCD5220Unit:
     
     def test_context_manager(self):
         """Test context manager functionality."""
-        with patch('serial.Serial') as mock_serial:
+        with patch('cd5220.serial.Serial') as mock_serial:
             mock_serial.return_value.is_open = True
             
             with CD5220('mock_port') as display:
@@ -376,7 +377,7 @@ class TestCD5220Unit:
         
         mock_display.clear_display()
         assert mock_display.current_mode == DisplayMode.NORMAL
-        assert mock_display.active_windows == {}
+        assert mock_display.active_window is None
         
         # Test that viewport operations can be cleanly reset
         mock_display.set_window(1, 5, 15)
@@ -393,20 +394,20 @@ class TestCD5220Unit:
         
         mock_display.clear_display()
         assert mock_display.current_mode == DisplayMode.NORMAL
-        assert mock_display.active_windows == {}
+        assert mock_display.active_window is None
 
 class TestCD5220ErrorHandling:
     """Test error handling scenarios."""
     
     def test_serial_connection_failure(self):
         """Test handling of serial connection failures."""
-        with patch('serial.Serial', side_effect=serial.SerialException("Connection failed")):
+        with patch('cd5220.serial.Serial', side_effect=serial.SerialException("Connection failed")):
             with pytest.raises(CD5220DisplayError, match="Serial connection failed"):
                 CD5220('invalid_port')
     
     def test_command_transmission_failure_during_init(self):
         """Test handling of command transmission failures during initialization."""
-        with patch('serial.Serial') as mock_serial:
+        with patch('cd5220.serial.Serial') as mock_serial:
             # Set up the mock to succeed for connection but fail for write
             mock_instance = MagicMock()
             mock_instance.write.side_effect = serial.SerialException("Write failed")
@@ -417,7 +418,7 @@ class TestCD5220ErrorHandling:
     
     def test_command_transmission_failure_after_init(self):
         """Test handling of command transmission failures after initialization."""
-        with patch('serial.Serial') as mock_serial:
+        with patch('cd5220.serial.Serial') as mock_serial:
             mock_serial.return_value.is_open = True
             display = CD5220('mock_port', debug=False)
             
@@ -429,7 +430,7 @@ class TestCD5220ErrorHandling:
 
     def test_viewport_error_conditions(self):
         """Test specific viewport mode error conditions."""
-        with patch('serial.Serial') as mock_serial:
+        with patch('cd5220.serial.Serial') as mock_serial:
             mock_serial.return_value.is_open = True
             display = CD5220('mock_port', debug=False)
             
@@ -439,7 +440,7 @@ class TestCD5220ErrorHandling:
                 display.write_viewport(1, "TEST")
             
             # Test entering viewport mode without windows
-            display.clear_all_windows()
+            display.clear_window()
             with pytest.raises(CD5220DisplayError, match="No windows configured"):
                 display.enter_viewport_mode()
 
