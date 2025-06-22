@@ -2,3 +2,4 @@ __pycache__/
 venv/
 *.md
 !README.md
+!README_ANIMATION.md

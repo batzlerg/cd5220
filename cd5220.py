@@ -639,11 +639,79 @@ class CD5220:
 
 import math
 import random
-from typing import List
+from typing import List, Iterator, Tuple, Optional
 
 
-class ASCIIAnimator:
-    """Low level frame buffer animator for CD5220 with diffed updates."""
+class DisplaySimulator:
+    """In-memory model of the 2x20 display for testing animations."""
+
+    def __init__(self) -> None:
+        self.lines: List[List[str]] = [list(" " * 20), list(" " * 20)]
+        self.frame_history: List[dict] = []
+
+    def clear(self) -> None:
+        self.lines = [list(" " * 20), list(" " * 20)]
+
+    def set_char(self, x: int, y: int, ch: str) -> None:
+        if 0 <= x < 20 and 0 <= y < 2:
+            self.lines[y][x] = ch
+
+    def get_line(self, y: int) -> str:
+        return "".join(self.lines[y])
+
+    def get_display(self) -> Tuple[str, str]:
+        return self.get_line(0), self.get_line(1)
+
+    def apply_frame(self, line1: str, line2: str) -> None:
+        old_state = self.get_display()
+        lines = [line1.ljust(20), line2.ljust(20)]
+        for y in range(2):
+            for x in range(20):
+                self.lines[y][x] = lines[y][x]
+        changes = list(self.diff(lines))
+        self.frame_history.append({
+            'old_state': old_state,
+            'new_state': self.get_display(),
+            'changes': changes,
+        })
+
+    def diff(self, new_lines: List[str]) -> Iterator[Tuple[int, int, str]]:
+        for y in range(2):
+            line = new_lines[y].ljust(20)
+            for x, ch in enumerate(line):
+                if self.lines[y][x] != ch:
+                    yield x, y, ch
+
+    # Assertion helpers for tests
+    def assert_char_at(self, x: int, y: int, expected: str) -> None:
+        actual = self.lines[y][x]
+        assert actual == expected, f"Char at ({x},{y}) expected '{expected}', got '{actual}'"
+
+    def assert_line_contains(self, line_num: int, text: str) -> None:
+        line = self.get_line(line_num)
+        assert text in line, f"Line {line_num} does not contain '{text}'"
+
+    def assert_line_equals(self, line_num: int, expected: str) -> None:
+        line = self.get_line(line_num).rstrip()
+        expected = expected.ljust(20).rstrip()
+        assert line == expected, (
+            f"Line {line_num}: expected '{expected}', got '{line}'"
+        )
+
+    def assert_region_equals(self, x: int, y: int, width: int, expected: str) -> None:
+        region = "".join(self.lines[y][x:x+width])
+        assert region == expected, f"Region ({x},{y},{width}) expected '{expected}', got '{region}'"
+
+    def assert_static_preserved(self, positions: List[Tuple[int, int, str]]) -> None:
+        for x, y, char in positions:
+            self.assert_char_at(x, y, char)
+
+    def dump(self) -> str:
+        return f"Line 1: '{self.get_line(0)}'\nLine 2: '{self.get_line(1)}'"
+
+
+class DiffAnimator:
+    """Pure diff-based animator that only uses cursor positioning."""
 
     def __init__(
         self,
@@ -651,69 +719,98 @@ class ASCIIAnimator:
         frame_rate: float = 4,
         sleep_fn: callable = time.sleep,
         frame_sleep_fn: callable = time.sleep,
-        diff_threshold: int = 10,
+        enable_simulator: bool = False,
     ) -> None:
         self.display = display
-        self.frame_buffer: List[List[str]] = [[' '] * 20 for _ in range(2)]
-        self._last_frame: List[List[str]] = [[' '] * 20 for _ in range(2)]
         self.frame_rate = frame_rate
         self.sleep_fn = sleep_fn
         self.frame_sleep_fn = frame_sleep_fn
-        self.diff_threshold = diff_threshold
+        self.buffer: List[List[str]] = [list(" " * 20), list(" " * 20)]
+        self.state: List[List[str]] = [list(" " * 20), list(" " * 20)]
+        self.simulator: Optional[DisplaySimulator] = DisplaySimulator() if enable_simulator else None
+        self.frame_buffer = self.buffer  # backward compatible attribute
 
     def sleep(self, seconds: float) -> None:
-        """Delay for non-frame operations (skippable)."""
         if seconds > 0 and self.sleep_fn is not None:
             self.sleep_fn(seconds)
 
     def frame_sleep(self, seconds: float) -> None:
-        """Delay controlling overall frame timing."""
         if seconds > 0 and self.frame_sleep_fn is not None:
             self.frame_sleep_fn(seconds)
 
     def clear_buffer(self) -> None:
-        self.frame_buffer = [[' '] * 20 for _ in range(2)]
+        self.buffer = [list(" " * 20), list(" " * 20)]
+        self.frame_buffer = self.buffer
 
     def reset_tracking(self) -> None:
-        """Reset internal diff tracking."""
-        self._last_frame = [[' '] * 20 for _ in range(2)]
+        self.state = [list(" " * 20), list(" " * 20)]
+        self.frame_buffer = self.buffer
 
     def set_char(self, x: int, y: int, char: str) -> None:
         if 0 <= x < 20 and 0 <= y < 2:
-            self.frame_buffer[y][x] = char
+            self.buffer[y][x] = char
 
     def render_frame(self) -> None:
-        changes = []
         for y in range(2):
             for x in range(20):
-                char = self.frame_buffer[y][x]
-                if char != self._last_frame[y][x]:
-                    changes.append((x, y, char))
-                    self._last_frame[y][x] = char
+                ch = self.buffer[y][x]
+                if ch != self.state[y][x]:
+                    self.display.write_positioned(ch, x + 1, y + 1)
+                    self.state[y][x] = ch
+                    if self.simulator:
+                        self.simulator.set_char(x, y, ch)
 
-        if len(changes) >= self.diff_threshold:
-            line1 = ''.join(self.frame_buffer[0])
-            line2 = ''.join(self.frame_buffer[1])
-            self.display.write_both_lines(line1, line2)
-        else:
-            for x, y, char in changes:
-                self.display.write_positioned(char, x + 1, y + 1)
+    def write_frame(self, line1: str, line2: str) -> None:
+        lines = [line1.ljust(20), line2.ljust(20)]
+        for y in range(2):
+            for x in range(20):
+                self.buffer[y][x] = lines[y][x]
+        self.frame_buffer = self.buffer
+        self.render_frame()
+
+    def clear_display(self) -> None:
+        self.display.clear_display()
+        self.clear_buffer()
+        self.reset_tracking()
+        if self.simulator:
+            self.simulator.clear()
+
+    def get_simulator(self) -> Optional[DisplaySimulator]:
+        """Return the attached DisplaySimulator, if enabled."""
+        return self.simulator
+
+    def enable_testing_mode(self) -> None:
+        """Enable the internal DisplaySimulator for existing instances."""
+        if self.simulator is None:
+            self.simulator = DisplaySimulator()
+            self.reset_tracking()
 
 
-def bouncing_ball_animation(animator: ASCIIAnimator, duration: float = 10.0) -> None:
-    """Bouncing ball using minimal character updates."""
+
+
+# Backwards compatibility alias
+ASCIIAnimator = DiffAnimator
+
+
+def bouncing_ball_animation(animator: DiffAnimator, duration: float = 10.0) -> None:
+    """Bouncing ball using the pure write_frame approach."""
     ball_x, ball_y = 0, 0
     vel_x, vel_y = 1, 1
     frame_count = int(duration * animator.frame_rate)
 
-    # draw static floor once
-    for x in range(20):
-        animator.set_char(x, 1, '_')
-    animator.set_char(ball_x, ball_y, '*')
-    animator.render_frame()
+    def build_frame() -> Tuple[str, str]:
+        line1 = [" "] * 20
+        line2 = ["_"] * 20
+        if ball_y == 0:
+            line1[ball_x] = "*"
+        else:
+            line2[ball_x] = "*"
+        return "".join(line1), "".join(line2)
+
+    line1, line2 = build_frame()
+    animator.write_frame(line1, line2)
 
     for _ in range(frame_count):
-        prev_x, prev_y = ball_x, ball_y
         ball_x += vel_x
         ball_y += vel_y
 
@@ -724,105 +821,99 @@ def bouncing_ball_animation(animator: ASCIIAnimator, duration: float = 10.0) -> 
             vel_y = -vel_y
             ball_y = max(0, min(ball_y, 1))
 
-        # restore previous char
-        animator.set_char(prev_x, prev_y, '_' if prev_y == 1 else ' ')
-        animator.set_char(ball_x, ball_y, '*')
-        animator.render_frame()
+        line1, line2 = build_frame()
+        animator.write_frame(line1, line2)
         animator.frame_sleep(1.0 / animator.frame_rate)
 
 
-def progress_bar_animation(animator: ASCIIAnimator, duration: float = 8.0) -> None:
-    """Animated progress bar with diffed updates."""
+def progress_bar_animation(animator: DiffAnimator, duration: float = 8.0) -> None:
+    """Animated progress bar using write_frame for each step."""
     steps = 10
     step_duration = duration / steps
 
-    # draw static template
-    for i, ch in enumerate("LOADING "):
-        animator.set_char(i, 0, ch)
-    animator.set_char(11, 0, '%')
-    for i, ch in enumerate("    [          ]    "):
-        animator.set_char(i, 1, ch)
-    animator.render_frame()
+    base_line1 = "LOADING    %        "
+    base_line2 = "    [          ]    "
+    animator.write_frame(base_line1, base_line2)
 
     for step in range(steps + 1):
         progress = step / steps
         filled = int(progress * 10)
         percentage = f"{int(progress * 100):03d}"
 
+        line1_chars = list(base_line1)
         for i, ch in enumerate(percentage):
-            animator.set_char(8 + i, 0, ch)
+            line1_chars[8 + i] = ch
+        line2_chars = list(base_line2)
         for i in range(10):
-            animator.set_char(5 + i, 1, '=' if i < filled else ' ')
-        animator.render_frame()
+            line2_chars[5 + i] = '=' if i < filled else ' '
+
+        animator.write_frame(''.join(line1_chars), ''.join(line2_chars))
         animator.frame_sleep(step_duration)
 
-    animator.display.write_both_lines('     COMPLETE!     ', '    [==========]    ')
+    animator.write_frame('     COMPLETE!      ', '    [==========]    ')
 
 
-def spinning_loader(animator: ASCIIAnimator, duration: float = 6.0) -> None:
-    """Spinner animation using a one-character viewport."""
+def spinning_loader(animator: DiffAnimator, duration: float = 6.0) -> None:
+    """Spinner animation updating only the spinner character."""
     spinner_chars = ['|', '/', '-', '\\']
     frame_count = int(duration * animator.frame_rate)
 
-    display = animator.display
-
-    text = "  Processing "
-    line1 = text.ljust(20)
+    base_text = "  Processing "
+    line1_base = base_text.ljust(20)
     line2 = "   Please wait...   "
 
-    display.write_both_lines(line1, line2)
-
-    spinner_col = len(text) + 1  # 1-based column after static text
-    display.set_window(1, spinner_col, spinner_col)
-    display.enter_viewport_mode()
+    spinner_col = len(base_text)
+    animator.write_frame(line1_base, line2)
 
     for frame in range(frame_count):
-        display.write_viewport(1, spinner_chars[frame % len(spinner_chars)])
+        chars = list(line1_base)
+        chars[spinner_col] = spinner_chars[frame % len(spinner_chars)]
+        animator.write_frame(''.join(chars), line2)
         animator.frame_sleep(1.0 / animator.frame_rate)
 
-    display.cancel_current_line()
-    display.clear_window()
+    animator.write_frame(line1_base, line2)
 
 
-def wave_animation(animator: ASCIIAnimator, duration: float = 8.0) -> None:
-    """Undulating wave pattern using diffed updates."""
+def wave_animation(animator: DiffAnimator, duration: float = 8.0) -> None:
+    """Undulating wave pattern using write_frame."""
     frame_count = int(duration * animator.frame_rate)
 
-    for x in range(20):
-        animator.set_char(x, 0, '~')
-        animator.set_char(x, 1, '~')
-    animator.render_frame()
+    line1 = "~" * 20
+    line2 = "~" * 20
+    animator.write_frame(line1, line2)
 
     for frame in range(frame_count):
         phase = frame * 0.5
+        line1_chars: List[str] = []
+        line2_chars: List[str] = []
         for x in range(20):
             wave_val = math.sin((x + phase) * 0.3)
             if wave_val > 0.3:
-                animator.set_char(x, 0, '^')
-                animator.set_char(x, 1, ' ')
+                line1_chars.append('^')
+                line2_chars.append(' ')
             elif wave_val < -0.3:
-                animator.set_char(x, 0, ' ')
-                animator.set_char(x, 1, 'v')
+                line1_chars.append(' ')
+                line2_chars.append('v')
             else:
-                animator.set_char(x, 0, '~')
-                animator.set_char(x, 1, '~')
-        animator.render_frame()
+                line1_chars.append('~')
+                line2_chars.append('~')
+        animator.write_frame(''.join(line1_chars), ''.join(line2_chars))
         animator.frame_sleep(1.0 / animator.frame_rate)
 
 
-def matrix_rain_animation(animator: ASCIIAnimator, duration: float = 12.0) -> None:
+def matrix_rain_animation(animator: DiffAnimator, duration: float = 12.0) -> None:
     columns = []
     for _ in range(20):
-        columns.append({'chars': [], 'speed': random.choice([1, 2, 3]), 'next_spawn': random.randint(0, 10)})
+        columns.append({'chars': [], 'next_spawn': random.randint(0, 10)})
 
     frame_count = int(duration * animator.frame_rate)
     chars = '01ABCDEF'
 
+    animator.write_frame(' ' * 20, ' ' * 20)
+
     for _ in range(frame_count):
-        # fill with spaces so diff only updates changed positions
-        for x in range(20):
-            animator.set_char(x, 0, ' ')
-            animator.set_char(x, 1, ' ')
+        line1_chars = [' '] * 20
+        line2_chars = [' '] * 20
         for col_idx, column in enumerate(columns):
             if column['next_spawn'] <= 0:
                 column['chars'].append({'char': random.choice(chars), 'y': -1})
@@ -833,13 +924,15 @@ def matrix_rain_animation(animator: ASCIIAnimator, duration: float = 12.0) -> No
                 char_data['y'] += 1
                 if char_data['y'] >= 2:
                     column['chars'].remove(char_data)
-                elif 0 <= char_data['y'] < 2:
-                    animator.set_char(col_idx, char_data['y'], char_data['char'])
-        animator.render_frame()
+                elif char_data['y'] == 0:
+                    line1_chars[col_idx] = char_data['char']
+                elif char_data['y'] == 1:
+                    line2_chars[col_idx] = char_data['char']
+        animator.write_frame(''.join(line1_chars), ''.join(line2_chars))
         animator.frame_sleep(1.0 / animator.frame_rate)
 
 
-def typewriter_animation(animator: ASCIIAnimator, text: str, line: int = 0) -> None:
+def typewriter_animation(animator: DiffAnimator, text: str, line: int = 0) -> None:
     row = 0 if line == 0 else 1
     for i, ch in enumerate(text):
         animator.display.write_positioned(ch, i + 1, row + 1)
@@ -852,11 +945,11 @@ def typewriter_animation(animator: ASCIIAnimator, text: str, line: int = 0) -> N
         animator.frame_sleep(0.3)
 
 
-def pulsing_alert(animator: ASCIIAnimator, message: str, duration: float = 6.0) -> None:
+def pulsing_alert(animator: DiffAnimator, message: str, duration: float = 6.0) -> None:
     """Pulse brightness while keeping text static."""
     pulse_count = int(duration * 2)
     centered = message.center(20)
-    animator.display.write_both_lines(centered, centered)
+    animator.write_frame(centered, centered)
     for pulse in range(pulse_count):
         brightness = 4 if pulse % 2 == 0 else 1
         animator.display.set_brightness(brightness)
@@ -875,7 +968,7 @@ class CD5220ASCIIAnimations:
         frame_sleep_fn: callable = time.sleep,
     ) -> None:
         self.display = display
-        self.animator = ASCIIAnimator(
+        self.animator = DiffAnimator(
             display,
             frame_rate=frame_rate,
             sleep_fn=sleep_fn,
@@ -904,13 +997,33 @@ class CD5220ASCIIAnimations:
     def pulsing_alert(self, message: str, duration: float = 6.0) -> None:
         pulsing_alert(self.animator, message, duration)
 
+    def get_simulator(self) -> Optional[DisplaySimulator]:
+        """Return the internal DisplaySimulator if enabled."""
+        return self.animator.simulator
+
+    def enable_testing_mode(self) -> None:
+        """Enable simulator-based testing."""
+        self.animator.enable_testing_mode()
+
     def play_startup_sequence(self) -> None:
         self.typewriter_animation("CD5220 STARTING...", line=0)
         self.animator.frame_sleep(1)
+
+        # ensure blank screen before progress bar
+        self.animator.clear_display()
         self.progress_bar_animation(duration=4)
         self.animator.frame_sleep(0.5)
+
+        # clear before matrix rain
+        self.animator.clear_display()
         self.matrix_rain_animation(duration=3)
+
+        # clear before ready alert
+        self.animator.clear_display()
         self.pulsing_alert("READY!", duration=2)
+
+        # leave the display cleared for next use
+        self.animator.clear_display()
 
     def play_demo_cycle(self) -> None:
         animations = [
@@ -921,8 +1034,15 @@ class CD5220ASCIIAnimations:
             ("Progress Bar", lambda: self.progress_bar_animation(duration=4)),
         ]
         for name, func in animations:
+            # Clear any remnants from previous animation
+            self.animator.clear_display()
+
+            # Show animation title briefly
             self.typewriter_animation(name, line=0)
             self.animator.frame_sleep(1)
+
+            # Start animation on a blank screen for visual clarity
+            self.animator.clear_display()
             func()
             self.animator.frame_sleep(1)
 

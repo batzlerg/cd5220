@@ -2,7 +2,9 @@ import pytest
 from unittest.mock import Mock, patch
 
 from cd5220 import (
-    ASCIIAnimator,
+    DiffAnimator,
+    CD5220,
+    DisplaySimulator,
     bouncing_ball_animation,
     progress_bar_animation,
     spinning_loader,
@@ -30,10 +32,11 @@ def mock_display():
 
 @pytest.fixture
 def animator(mock_display):
-    return ASCIIAnimator(
+    return DiffAnimator(
         mock_display,
         sleep_fn=lambda _ : None,
         frame_sleep_fn=lambda _ : None,
+        enable_simulator=True,
     )
 
 
@@ -48,7 +51,8 @@ def test_render_frame_calls_display(animator):
     animator.set_char(0, 0, 'A')
     animator.set_char(0, 1, 'B')
     animator.render_frame()
-    assert animator.display.write_both_lines.called or animator.display.write_positioned.called
+    assert animator.display.write_positioned.called
+    assert not animator.display.write_both_lines.called
 
 
 def test_basic_animations_call_write(animator):
@@ -57,13 +61,15 @@ def test_basic_animations_call_write(animator):
     spinning_loader(animator, duration=0.1)
     wave_animation(animator, duration=0.1)
     matrix_rain_animation(animator, duration=0.1)
-    assert animator.display.write_both_lines.called or animator.display.write_positioned.called
+    assert animator.display.write_positioned.called
+    assert not animator.display.write_both_lines.called
 
 
 def test_typewriter_and_pulse_use_display(animator):
     typewriter_animation(animator, 'TEST', line=0)
     pulsing_alert(animator, 'ALERT', duration=0.2)
-    assert animator.display.write_both_lines.called or animator.display.write_positioned.called
+    assert animator.display.write_positioned.called
+    assert not animator.display.write_both_lines.called
     assert animator.display.set_brightness.called
 
 
@@ -74,27 +80,81 @@ def test_wrapper_instantiation(mock_display):
         frame_sleep_fn=lambda _ : None,
     )
     assert library.display is mock_display
-    assert isinstance(library.animator, ASCIIAnimator)
+    assert isinstance(library.animator, DiffAnimator)
 
 def test_custom_sleep_functions(animator, mock_display):
     sleep_calls = []
     frame_calls = []
-    animator = ASCIIAnimator(
+    animator = DiffAnimator(
         mock_display,
         sleep_fn=lambda s: sleep_calls.append(s),
         frame_sleep_fn=lambda s: frame_calls.append(s),
         frame_rate=2,
+        enable_simulator=True,
     )
     bouncing_ball_animation(animator, duration=0.5)
     assert frame_calls
 
 
-def test_spinning_loader_uses_viewport(animator):
-    spinning_loader(animator, duration=0.3)
+def test_spinning_loader_updates_spinner_only(animator):
+    spinning_loader(animator, duration=0.2)
     display = animator.display
-    assert display.set_window.called
-    assert display.enter_viewport_mode.called
-    assert display.write_viewport.called
-    assert display.cancel_current_line.called
-    assert display.clear_window.called
+    # Should not use viewport or string mode helpers
+    assert not display.set_window.called
+    assert not display.enter_viewport_mode.called
+    assert not display.write_viewport.called
+    # Spinner updates use write_positioned
+    assert display.write_positioned.called
+
+
+def test_progress_bar_exits_string_mode():
+    with patch('cd5220.serial.Serial') as mock_serial:
+        mock_serial.return_value.is_open = True
+        display = CD5220('mock', debug=False, initialization_delay=0)
+        display.ser = mock_serial.return_value
+
+        animator = DiffAnimator(
+            display,
+            sleep_fn=lambda _ : None,
+            frame_sleep_fn=lambda _ : None,
+            enable_simulator=True,
+        )
+
+        with patch.object(display, 'write_both_lines') as wb, \
+             patch.object(display, 'write_positioned') as wp, \
+             patch.object(display, 'cancel_current_line') as cc, \
+             patch.object(display, 'clear_display') as cd:
+            progress_bar_animation(animator, duration=0.1)
+            assert not wb.called
+            assert cd.call_count == 0
+
+
+def test_display_simulator_diff():
+    sim = DisplaySimulator()
+    sim.apply_frame("HELLO", "WORLD")
+    changes = list(sim.diff(["HELLO", "THERE"]))
+    assert (0, 1, 'T') in changes
+
+
+def test_progress_bar_static_elements(animator):
+    progress_bar_animation(animator, duration=0.1)
+    sim = animator.simulator
+    assert sim is not None
+    sim.assert_char_at(4, 1, '[')
+    sim.assert_char_at(15, 1, ']')
+
+
+def test_simulator_assertions_and_access(mock_display):
+    animator = DiffAnimator(mock_display, enable_simulator=False,
+                            sleep_fn=lambda _: None, frame_sleep_fn=lambda _: None)
+    assert animator.get_simulator() is None
+    animator.enable_testing_mode()
+    sim = animator.get_simulator()
+    assert isinstance(sim, DisplaySimulator)
+    progress_bar_animation(animator, duration=0.1)
+    sim.assert_line_contains(0, "COMPLETE")
+    sim.assert_line_equals(1, "    [==========]    ")
+    sim.assert_static_preserved([(4, 1, '['), (15, 1, ']')])
+    assert "Line 1:" in sim.dump()
+
 
