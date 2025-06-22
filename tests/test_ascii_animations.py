@@ -10,6 +10,10 @@ from cd5220 import (
     spinning_loader,
     wave_animation,
     matrix_rain_animation,
+    spinner_tapestry,
+    cloud_conveyor,
+    zen_breathing,
+    firework_bursts,
     typewriter_animation,
     pulsing_alert,
     CD5220ASCIIAnimations,
@@ -61,6 +65,10 @@ def test_basic_animations_call_write(animator):
     spinning_loader(animator, duration=0.1)
     wave_animation(animator, duration=0.1)
     matrix_rain_animation(animator, duration=0.1)
+    spinner_tapestry(animator, duration=0.1)
+    cloud_conveyor(animator, duration=0.1)
+    zen_breathing(animator, duration=0.1)
+    firework_bursts(animator, duration=0.1)
     assert animator.display.write_positioned.called
     assert not animator.display.write_both_lines.called
 

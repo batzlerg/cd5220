@@ -1008,6 +1008,145 @@ def pulsing_alert(animator: DiffAnimator, message: str, duration: float = 6.0) -
     animator.display.set_brightness(4)
 
 
+def spinner_tapestry(animator: DiffAnimator, duration: float = 6.0) -> None:
+    """Grid of tiny spinners with column phased rotation."""
+    spinner_chars = ['|', '/', '-', '\\']
+    frame_count = int(duration * animator.frame_rate)
+
+    def build_frame(frame: int) -> Tuple[str, str]:
+        line1 = [' '] * 20
+        line2 = [' '] * 20
+        for col in range(5):
+            idx = (frame + col) % 4
+            pos = col * 4
+            if pos < 20:
+                line1[pos] = spinner_chars[idx]
+                line2[pos] = spinner_chars[(idx + 2) % 4]
+        return "".join(line1), "".join(line2)
+
+    line1, line2 = build_frame(0)
+    animator.write_frame(line1, line2)
+    for f in range(frame_count):
+        line1, line2 = build_frame(f + 1)
+        animator.write_frame(line1, line2)
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+
+
+def cloud_conveyor(animator: DiffAnimator, duration: float = 6.0) -> None:
+    """Drifting clouds that wrap left to right."""
+    frame_count = int(duration * animator.frame_rate)
+    random.seed(0)
+    def seed_clouds() -> List[int]:
+        positions = []
+        while len(positions) < 3:
+            x = random.randint(0, 17)
+            if all(abs(x - p) > 3 for p in positions):
+                positions.append(x)
+        return sorted(positions)
+
+    clouds_top = seed_clouds()
+    clouds_bot = seed_clouds()
+
+    def render() -> Tuple[str, str]:
+        line1 = [' '] * 20
+        line2 = [' '] * 20
+        for x in clouds_top:
+            for i, ch in enumerate('(~)'):
+                pos = x + i
+                if 0 <= pos < 20:
+                    line1[pos] = ch
+        for x in clouds_bot:
+            for i, ch in enumerate('(~)'):
+                pos = x + i
+                if 0 <= pos < 20:
+                    line2[pos] = ch
+        return "".join(line1), "".join(line2)
+
+    line1, line2 = render()
+    animator.write_frame(line1, line2)
+    for _ in range(frame_count):
+        clouds_top = [17 if (x - 1) < -2 else x - 1 for x in clouds_top]
+        clouds_bot = [17 if (x - 1) < -2 else x - 1 for x in clouds_bot]
+        line1, line2 = render()
+        animator.write_frame(line1, line2)
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+
+def zen_breathing(animator: DiffAnimator, duration: float = 6.0) -> None:
+    """Calming dot that expands and contracts in a breathing rhythm."""
+    frames = [
+        ("                    ", "         .          "),
+        ("         .          ", "        .o.         "),
+        ("        .o.         ", "       .oOo.        "),
+        ("       .oOo.        ", "      .oOOOo.       "),
+        ("      .oOOOo.       ", "     .oOOOOOo.      "),
+        ("     .oOOOOOo.      ", "    .oOOOOOOOo.     "),
+        ("    .oOOOOOOOo.     ", "   .oOOOOOOOOOo.    "),
+        ("   .oOOOOOOOOOo.    ", "  .oOOOOOOOOOOOo.   "),
+        ("  .oOOOOOOOOOOOo.   ", "   .oOOOOOOOOOo.    "),
+        ("   .oOOOOOOOOOo.    ", "    .oOOOOOOOo.     "),
+        ("    .oOOOOOOOo.     ", "     .oOOOOOo.      "),
+        ("     .oOOOOOo.      ", "      .oOOOo.       "),
+        ("      .oOOOo.       ", "       .oOo.        "),
+        ("       .oOo.        ", "        .o.         "),
+        ("        .o.         ", "         .          "),
+        ("         .          ", "                    "),
+    ]
+    frame_count = int(duration * animator.frame_rate)
+    line1, line2 = frames[0]
+    animator.write_frame(line1, line2)
+    for i in range(frame_count):
+        line1, line2 = frames[(i + 1) % len(frames)]
+        animator.write_frame(line1, line2)
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+
+def firework_bursts(animator: DiffAnimator, duration: float = 6.0) -> None:
+    """Randomized star bursts with expanding rings."""
+    frame_count = int(duration * animator.frame_rate)
+    random.seed(1)
+    bursts = max(1, frame_count // 10)
+    start_times = [i * 10 for i in range(bursts)]
+    positions = [(random.randint(3, 16), random.randint(0, 1)) for _ in range(bursts)]
+
+    def render(f: int) -> Tuple[str, str]:
+        line1 = [' '] * 20
+        line2 = [' '] * 20
+        for (start, (x, y)) in zip(start_times, positions):
+            t = f - start
+            if t < 0 or t > 9:
+                continue
+            if t == 0:
+                if y == 0:
+                    line1[x] = '*'
+                else:
+                    line2[x] = '*'
+            else:
+                radius = t
+                left = x - radius
+                right = x + radius
+                if y == 0:
+                    if 0 <= left < 20:
+                        line1[left] = '('
+                    if 0 <= right < 20:
+                        line1[right] = ')'
+                else:
+                    if 0 <= left < 20:
+                        line2[left] = '('
+                    if 0 <= right < 20:
+                        line2[right] = ')'
+        return "".join(line1), "".join(line2)
+
+    line1, line2 = render(0)
+    animator.write_frame(line1, line2)
+    for f in range(frame_count):
+        line1, line2 = render(f + 1)
+        animator.write_frame(line1, line2)
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+
+
 class CD5220ASCIIAnimations:
     """High level ASCII animation wrapper."""
 
@@ -1050,6 +1189,18 @@ class CD5220ASCIIAnimations:
     def pulsing_alert(self, message: str, duration: float = 6.0) -> None:
         pulsing_alert(self.animator, message, duration)
 
+    def spinner_tapestry(self, duration: float = 6.0) -> None:
+        spinner_tapestry(self.animator, duration)
+
+    def cloud_conveyor(self, duration: float = 6.0) -> None:
+        cloud_conveyor(self.animator, duration)
+
+    def zen_breathing(self, duration: float = 6.0) -> None:
+        zen_breathing(self.animator, duration)
+
+    def firework_bursts(self, duration: float = 6.0) -> None:
+        firework_bursts(self.animator, duration)
+
     def get_simulator(self) -> Optional[DisplaySimulator]:
         """Return the internal DisplaySimulator if enabled."""
         return self.animator.simulator
@@ -1085,6 +1236,10 @@ class CD5220ASCIIAnimations:
             ("Matrix Rain", lambda: self.matrix_rain_animation(duration=5)),
             ("Spinner", lambda: self.spinning_loader(duration=3)),
             ("Progress Bar", lambda: self.progress_bar_animation(duration=4)),
+            ("Spinner Tapestry", lambda: self.spinner_tapestry(duration=3)),
+            ("Cloud Conveyor", lambda: self.cloud_conveyor(duration=3)),
+            ("Zen Breathing", lambda: self.zen_breathing(duration=3)),
+            ("Firework Bursts", lambda: self.firework_bursts(duration=3)),
         ]
         for name, func in animations:
             # Clear any remnants from previous animation
