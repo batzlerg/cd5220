@@ -14,6 +14,7 @@ Controls 2×20 character VFD displays with features including:
 - Fast string writing modes
 - Diff‑based ASCII animations via `DiffAnimator`
 - Optional `DisplaySimulator` for animation testing
+- In-terminal console rendering of animations for visual debugging
 
 ## Installation
 
@@ -118,11 +119,13 @@ python -m pytest tests/ -v
 python demo.py --port /dev/ttyUSB0 --demo all
 python demo.py --port /dev/ttyUSB0 --demo scrolling --fast
 python demo.py --port /dev/ttyUSB0 --demo ascii
+python demo_animations.py --port /dev/ttyUSB0
+python demo_animations.py --port /dev/ttyUSB0 --debug
 ```
 
 ## Developing Animations
 
-Animations use the diff-based `DiffAnimator` API. See `README_ANIMATIONS.md` for a step-by-step guide on crafting frames and writing updates. The provided `DisplaySimulator` can be enabled on any animator instance for unit testing and visual verification.
+Animations use the diff-based `DiffAnimator` API. See `README_ANIMATIONS.md` for a step-by-step guide on crafting frames and writing updates. The provided `DisplaySimulator` can be enabled on any animator instance for unit testing and visual verification. When debugging animations, enable `render_console=True` on a `DiffAnimator` or run `demo_animations.py` to watch a live simulation update in your terminal instead of verbose logging.
 
 ## Features Not Yet Implemented
 

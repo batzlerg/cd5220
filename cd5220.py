@@ -31,6 +31,7 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for test env
     )
 import time
 import logging
+import sys
 from typing import Union, Optional, Dict, Any, Tuple
 from enum import Enum
 
@@ -711,7 +712,11 @@ class DisplaySimulator:
 
 
 class DiffAnimator:
-    """Pure diff-based animator that only uses cursor positioning."""
+    """Pure diff-based animator that only uses cursor positioning.
+
+    When ``render_console`` is True, the internal ``DisplaySimulator`` is
+    rendered to the terminal after each frame for visual debugging.
+    """
 
     def __init__(
         self,
@@ -720,14 +725,29 @@ class DiffAnimator:
         sleep_fn: callable = time.sleep,
         frame_sleep_fn: callable = time.sleep,
         enable_simulator: bool = False,
+        render_console: bool = False,
     ) -> None:
+        """Create a new animator.
+
+        Args:
+            display: ``CD5220`` instance used for output
+            frame_rate: Frames per second
+            sleep_fn: General purpose sleep callback
+            frame_sleep_fn: Sleep callback used between frames
+            enable_simulator: Start with an attached ``DisplaySimulator``
+            render_console: If True, render the simulator state to the
+                terminal after each frame. Implies ``enable_simulator``.
+        """
         self.display = display
         self.frame_rate = frame_rate
         self.sleep_fn = sleep_fn
         self.frame_sleep_fn = frame_sleep_fn
         self.buffer: List[List[str]] = [list(" " * 20), list(" " * 20)]
         self.state: List[List[str]] = [list(" " * 20), list(" " * 20)]
+        self.render_console = render_console
+        enable_simulator = enable_simulator or render_console
         self.simulator: Optional[DisplaySimulator] = DisplaySimulator() if enable_simulator else None
+        self._first_console_render = True
         self.frame_buffer = self.buffer  # backward compatible attribute
 
     def sleep(self, seconds: float) -> None:
@@ -759,6 +779,8 @@ class DiffAnimator:
                     self.state[y][x] = ch
                     if self.simulator:
                         self.simulator.set_char(x, y, ch)
+        if self.render_console:
+            self._render_console()
 
     def write_frame(self, line1: str, line2: str) -> None:
         lines = [line1.ljust(20), line2.ljust(20)]
@@ -774,6 +796,8 @@ class DiffAnimator:
         self.reset_tracking()
         if self.simulator:
             self.simulator.clear()
+        if self.render_console:
+            self._first_console_render = True
 
     def get_simulator(self) -> Optional[DisplaySimulator]:
         """Return the attached DisplaySimulator, if enabled."""
@@ -784,6 +808,33 @@ class DiffAnimator:
         if self.simulator is None:
             self.simulator = DisplaySimulator()
             self.reset_tracking()
+
+    def enable_console_render(self) -> None:
+        """Enable console rendering of each frame using the simulator."""
+        if not self.simulator:
+            self.simulator = DisplaySimulator()
+            self.reset_tracking()
+        self.render_console = True
+
+    def _render_console(self) -> None:
+        """Render the simulator state to the terminal in-place."""
+        if not self.simulator:
+            return
+        line1, line2 = self.simulator.get_display()
+        sep = "-" * 20
+        if self._first_console_render:
+            sys.stdout.write(sep + "\n")
+            sys.stdout.write(line1 + "\n")
+            sys.stdout.write(line2 + "\n")
+            sys.stdout.write(sep + "\n")
+            self._first_console_render = False
+        else:
+            sys.stdout.write("\x1b[4A")
+            sys.stdout.write("\x1b[2K" + sep + "\n")
+            sys.stdout.write("\x1b[2K" + line1 + "\n")
+            sys.stdout.write("\x1b[2K" + line2 + "\n")
+            sys.stdout.write("\x1b[2K" + sep + "\n")
+        sys.stdout.flush()
 
 
 
@@ -966,6 +1017,7 @@ class CD5220ASCIIAnimations:
         frame_rate: float = 4,
         sleep_fn: callable = time.sleep,
         frame_sleep_fn: callable = time.sleep,
+        render_console: bool = False,
     ) -> None:
         self.display = display
         self.animator = DiffAnimator(
@@ -973,6 +1025,7 @@ class CD5220ASCIIAnimations:
             frame_rate=frame_rate,
             sleep_fn=sleep_fn,
             frame_sleep_fn=frame_sleep_fn,
+            render_console=render_console,
         )
         self.animator.reset_tracking()
 

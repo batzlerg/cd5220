@@ -78,6 +78,7 @@ def test_wrapper_instantiation(mock_display):
         mock_display,
         sleep_fn=lambda _ : None,
         frame_sleep_fn=lambda _ : None,
+        render_console=False,
     )
     assert library.display is mock_display
     assert isinstance(library.animator, DiffAnimator)
@@ -156,5 +157,26 @@ def test_simulator_assertions_and_access(mock_display):
     sim.assert_line_equals(1, "    [==========]    ")
     sim.assert_static_preserved([(4, 1, '['), (15, 1, ']')])
     assert "Line 1:" in sim.dump()
+
+
+def test_console_render_outputs_frames(capsys, mock_display):
+    animator = DiffAnimator(
+        mock_display,
+        enable_simulator=False,
+        render_console=True,
+        sleep_fn=lambda _: None,
+        frame_sleep_fn=lambda _: None,
+    )
+    animator.write_frame("HELLO", "WORLD")
+    out1 = capsys.readouterr().out
+    sep = "-" * 20
+    assert sep in out1
+    assert "HELLO" in out1
+    assert "WORLD" in out1
+    animator.write_frame("BYE", "NOW")
+    out2 = capsys.readouterr().out
+    # console render should update in place with escape sequences
+    assert sep in out2
+    assert "BYE" in out2
 
 

@@ -38,7 +38,9 @@ sim = animator.get_simulator()
 sim.assert_line_contains(0, "EXPECTED")
 ```
 
-The simulator tracks the display state and provides assertion helpers.
+The simulator tracks the display state and provides assertion helpers. For interactive debugging, instantiate ``DiffAnimator`` with ``render_console=True`` to display the simulator's contents in your terminal and observe each frame as it would appear on hardware. 
+
+``demo_animations.py`` implements this by default with ``--render-console`` to see all built-in animations directly in your terminal. To make the frame output cleaner, it does not output debug logs by default - use ``--debug`` to include verbose logging alongside the frame output.
 
 ## 4. Integrate into `CD5220ASCIIAnimations`
 
