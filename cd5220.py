@@ -836,13 +836,6 @@ class DiffAnimator:
             sys.stdout.write("\x1b[2K" + sep + "\n")
         sys.stdout.flush()
 
-
-
-
-# Backwards compatibility alias
-ASCIIAnimator = DiffAnimator
-
-
 def bouncing_ball_animation(animator: DiffAnimator, duration: float = 10.0) -> None:
     """Bouncing ball using the pure write_frame approach."""
     ball_x, ball_y = 0, 0
