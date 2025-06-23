@@ -1218,35 +1218,26 @@ class CD5220ASCIIAnimations:
         self.animator.enable_testing_mode()
 
     def play_startup_sequence(self) -> None:
-        self.typewriter_animation("CD5220 STARTING...", line=0)
+        self.typewriter_animation("ASCII ANIMATE DEMO", line=0)
         self.animator.frame_sleep(1)
 
-        # ensure blank screen before progress bar
-        self.animator.clear_display()
-        self.progress_bar_animation(duration=4)
-        self.animator.frame_sleep(0.5)
-
-        # clear before matrix rain
-        self.animator.clear_display()
-        self.matrix_rain_animation(duration=3)
-
         # clear before ready alert
-        self.animator.clear_display()
-        self.pulsing_alert("READY!", duration=2)
+        # self.animator.clear_display()
+        # self.pulsing_alert("READY!", duration=2)
 
         # leave the display cleared for next use
         self.animator.clear_display()
 
     def play_demo_cycle(self) -> None:
         animations = [
-            ("Bouncing Ball", lambda: self.bouncing_ball_animation(duration=5)),
-            ("Matrix Rain", lambda: self.matrix_rain_animation(duration=5)),
-            ("Spinner", lambda: self.spinning_loader(duration=3)),
-            ("Progress Bar", lambda: self.progress_bar_animation(duration=4)),
-            ("Spinner Tapestry", lambda: self.spinner_tapestry(duration=3)),
-            ("Cloud Conveyor", lambda: self.cloud_conveyor(duration=3)),
-            ("Zen Breathing", lambda: self.zen_breathing(duration=3)),
-            ("Firework Bursts", lambda: self.firework_bursts(duration=3)),
+            ("Bouncing Ball", lambda: self.bouncing_ball_animation(duration=10)),
+            ("Matrix Rain", lambda: self.matrix_rain_animation(duration=10)),
+            ("Spinning Loader", lambda: self.spinning_loader(duration=5)),
+            ("Progress Bar", lambda: self.progress_bar_animation(duration=5)),
+            ("Spinner Tapestry", lambda: self.spinner_tapestry(duration=10)),
+            ("Cloud Conveyor", lambda: self.cloud_conveyor(duration=10)),
+            ("Zen Breathing", lambda: self.zen_breathing(30)),
+            ("Firework Bursts", lambda: self.firework_bursts(20)),
         ]
         for name, func in animations:
             # Clear any remnants from previous animation
