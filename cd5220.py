@@ -837,7 +837,7 @@ class DiffAnimator:
         sys.stdout.flush()
 
 def bouncing_ball_animation(animator: DiffAnimator, duration: float = 10.0) -> None:
-    """Bouncing ball using the pure write_frame approach."""
+    """Bouncing ball with gravity effect."""
     ball_x, ball_y = 0, 0
     vel_x, vel_y = 1, 1
     frame_count = int(duration * animator.frame_rate)
@@ -867,8 +867,12 @@ def bouncing_ball_animation(animator: DiffAnimator, duration: float = 10.0) -> N
 
         line1, line2 = build_frame()
         animator.write_frame(line1, line2)
-        animator.frame_sleep(1.0 / animator.frame_rate)
 
+        # janky gravity sim - ground frames faster and air frames slower
+        if ball_y == 0:
+            animator.frame_sleep(1.2 / animator.frame_rate) # longer sleep = slower on ground
+        else:
+            animator.frame_sleep(0.8 / animator.frame_rate) # shorter sleep = faster in air
 
 def progress_bar_animation(animator: DiffAnimator, duration: float = 8.0) -> None:
     """Animated progress bar using write_frame for each step."""
