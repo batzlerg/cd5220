@@ -921,34 +921,6 @@ def spinning_loader(animator: DiffAnimator, duration: float = 6.0) -> None:
 
     animator.write_frame(line1_base, line2)
 
-
-def wave_animation(animator: DiffAnimator, duration: float = 8.0) -> None:
-    """Undulating wave pattern using write_frame."""
-    frame_count = int(duration * animator.frame_rate)
-
-    line1 = "~" * 20
-    line2 = "~" * 20
-    animator.write_frame(line1, line2)
-
-    for frame in range(frame_count):
-        phase = frame * 0.5
-        line1_chars: List[str] = []
-        line2_chars: List[str] = []
-        for x in range(20):
-            wave_val = math.sin((x + phase) * 0.3)
-            if wave_val > 0.3:
-                line1_chars.append('^')
-                line2_chars.append(' ')
-            elif wave_val < -0.3:
-                line1_chars.append(' ')
-                line2_chars.append('v')
-            else:
-                line1_chars.append('~')
-                line2_chars.append('~')
-        animator.write_frame(''.join(line1_chars), ''.join(line2_chars))
-        animator.frame_sleep(1.0 / animator.frame_rate)
-
-
 def matrix_rain_animation(animator: DiffAnimator, duration: float = 12.0) -> None:
     columns = []
     for _ in range(20):
@@ -1174,9 +1146,6 @@ class CD5220ASCIIAnimations:
     def spinning_loader(self, duration: float = 6.0) -> None:
         spinning_loader(self.animator, duration)
 
-    def wave_animation(self, duration: float = 8.0) -> None:
-        wave_animation(self.animator, duration)
-
     def matrix_rain_animation(self, duration: float = 12.0) -> None:
         matrix_rain_animation(self.animator, duration)
 
@@ -1229,7 +1198,6 @@ class CD5220ASCIIAnimations:
     def play_demo_cycle(self) -> None:
         animations = [
             ("Bouncing Ball", lambda: self.bouncing_ball_animation(duration=5)),
-            ("Wave Motion", lambda: self.wave_animation(duration=5)),
             ("Matrix Rain", lambda: self.matrix_rain_animation(duration=5)),
             ("Spinner", lambda: self.spinning_loader(duration=3)),
             ("Progress Bar", lambda: self.progress_bar_animation(duration=4)),
