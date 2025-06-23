@@ -1060,35 +1060,58 @@ def cloud_conveyor(animator: DiffAnimator, duration: float = 6.0) -> None:
         animator.write_frame(line1, line2)
         animator.frame_sleep(1.0 / animator.frame_rate)
 
-
-def zen_breathing(animator: DiffAnimator, duration: float = 6.0) -> None:
-    """Calming dot that expands and contracts in a breathing rhythm."""
-    frames = [
-        ("                    ", "         .          "),
-        ("         .          ", "        .o.         "),
-        ("        .o.         ", "       .oOo.        "),
-        ("       .oOo.        ", "      .oOOOo.       "),
-        ("      .oOOOo.       ", "     .oOOOOOo.      "),
-        ("     .oOOOOOo.      ", "    .oOOOOOOOo.     "),
-        ("    .oOOOOOOOo.     ", "   .oOOOOOOOOOo.    "),
-        ("   .oOOOOOOOOOo.    ", "  .oOOOOOOOOOOOo.   "),
-        ("  .oOOOOOOOOOOOo.   ", "   .oOOOOOOOOOo.    "),
-        ("   .oOOOOOOOOOo.    ", "    .oOOOOOOOo.     "),
-        ("    .oOOOOOOOo.     ", "     .oOOOOOo.      "),
-        ("     .oOOOOOo.      ", "      .oOOOo.       "),
-        ("      .oOOOo.       ", "       .oOo.        "),
-        ("       .oOo.        ", "        .o.         "),
-        ("        .o.         ", "         .          "),
-        ("         .          ", "                    "),
-    ]
+def zen_breathing(animator: DiffAnimator, duration: float = 1.0, max_radius: int = 10, phase_offset: int = 3, pause_length: int = 10) -> None:
+    """Calming dot that expands and contracts in a breathing rhythm with variables, always starting with rest frame."""
     frame_count = int(duration * animator.frame_rate)
-    line1, line2 = frames[0]
-    animator.write_frame(line1, line2)
+    width = 20
+    center = width // 2
+
+    # clamp to prevent overflow
+    max_radius = min(max_radius, center - 1)
+
+    def build_line(radius: int) -> str:
+        if radius == 0:
+            line = [' '] * width
+            line[center] = '.'
+            return ''.join(line)
+
+        line = [' '] * width
+        for i in range(width):
+            dist = abs(i - center)
+            if dist == radius:
+                line[i] = '.'  # outer edge
+            elif dist == radius - 1:
+                line[i] = 'o'  # one ring in from edge
+            elif dist < radius:
+                line[i] = 'O'  # all interior positions
+        return ''.join(line)
+
+    # total frames for one full breath cycle
+    cycle_length = 2 * max_radius + pause_length
+
+    def get_radius(frame: int) -> int:
+        # offset so we start in the rest phase
+        frame_offset = frame + pause_length
+        frame_mod = frame_offset % cycle_length
+
+        if frame_mod < pause_length:
+            return 0  # pause at rest dot
+        elif frame_mod < pause_length + max_radius:
+            return (frame_mod - pause_length) + 1  # expanding from 1 to max_radius
+        else:
+            return max_radius - ((frame_mod - pause_length) - max_radius)  # contracting
+
+    # write the rest frame first
+    rest_line = build_line(0)
+    animator.write_frame(rest_line, rest_line)
+
     for i in range(frame_count):
-        line1, line2 = frames[(i + 1) % len(frames)]
+        radius1 = get_radius(i)
+        radius2 = get_radius(i + phase_offset)
+        line1 = build_line(radius1)
+        line2 = build_line(radius2)
         animator.write_frame(line1, line2)
         animator.frame_sleep(1.0 / animator.frame_rate)
-
 
 def firework_bursts(animator: DiffAnimator, duration: float = 6.0) -> None:
     """Randomized star bursts with expanding rings."""
