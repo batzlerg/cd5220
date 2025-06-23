@@ -906,7 +906,7 @@ def spinning_loader(animator: DiffAnimator, duration: float = 6.0) -> None:
     spinner_chars = ['|', '/', '-', '\\']
     frame_count = int(duration * animator.frame_rate)
 
-    base_text = "  Processing "
+    base_text = "   Processing  "
     line1_base = base_text.ljust(20)
     line2 = "   Please wait...   "
 
@@ -976,21 +976,40 @@ def pulsing_alert(animator: DiffAnimator, message: str, duration: float = 6.0) -
         animator.frame_sleep(0.5)
     animator.display.set_brightness(4)
 
-
 def spinner_tapestry(animator: DiffAnimator, duration: float = 6.0) -> None:
-    """Grid of tiny spinners with column phased rotation."""
+    """Field of spinners rotating in place."""
     spinner_chars = ['|', '/', '-', '\\']
     frame_count = int(duration * animator.frame_rate)
+
+    # define the initial patterns
+    row1 = "X X X X X X X X X X".ljust(20)
+    row2 = " X X X X X X X X X X".ljust(20)
+
+    row1_positions = []
+    row2_positions = []
+
+    for i, char in enumerate(row1):
+        if char.upper() == 'X':
+            row1_positions.append(i)
+
+    for i, char in enumerate(row2):
+        if char.upper() == 'X':
+            row2_positions.append(i)
 
     def build_frame(frame: int) -> Tuple[str, str]:
         line1 = [' '] * 20
         line2 = [' '] * 20
-        for col in range(5):
-            idx = (frame + col) % 4
-            pos = col * 4
-            if pos < 20:
-                line1[pos] = spinner_chars[idx]
-                line2[pos] = spinner_chars[(idx + 2) % 4]
+
+        # Build line1 using only row1 positions
+        for col_idx, pos in enumerate(row1_positions):
+            idx = (frame + col_idx) % 4
+            line1[pos] = spinner_chars[idx]
+
+        # Build line2 using only row2 positions
+        for col_idx, pos in enumerate(row2_positions):
+            idx = (frame + col_idx) % 4
+            line2[pos] = spinner_chars[(idx + 2) % 4]
+
         return "".join(line1), "".join(line2)
 
     line1, line2 = build_frame(0)
