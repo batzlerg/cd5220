@@ -1118,7 +1118,7 @@ def firework_bursts(animator: DiffAnimator, duration: float = 6.0) -> None:
     frame_count = int(duration * animator.frame_rate)
     random.seed(1)
     bursts = max(1, frame_count // 10)
-    start_times = [i * 10 for i in range(bursts)]
+    start_times = [i * random.randint(2, 10) for i in range(bursts)]
     positions = [(random.randint(3, 16), random.randint(0, 1)) for _ in range(bursts)]
 
     def render(f: int) -> Tuple[str, str]:
