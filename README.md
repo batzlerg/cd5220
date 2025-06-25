@@ -93,11 +93,11 @@ with CD5220('/dev/ttyUSB0') as display:
 ```
 ### ASCII animations
 ```python
-from cd5220 import CD5220ASCIIAnimations
+from animations import ASCIIAnimations
 
 with CD5220('/dev/ttyUSB0') as display:
     # disable character delays but keep frame timing
-    animations = CD5220ASCIIAnimations(
+    animations = ASCIIAnimations(
         display,
         sleep_fn=lambda _ : None,
         frame_sleep_fn=lambda _ : None,
@@ -119,8 +119,12 @@ python -m pytest tests/ -v
 python demo.py --port /dev/ttyUSB0 --demo all
 python demo.py --port /dev/ttyUSB0 --demo scrolling --fast
 python demo.py --port /dev/ttyUSB0 --demo ascii
-python demo_animations.py --port /dev/ttyUSB0
-python demo_animations.py --port /dev/ttyUSB0 --debug
+python demo_animations.py --animation matrix --port /dev/ttyUSB0
+python demo_animations.py --animation zen --port /dev/ttyUSB0 --debug --max_radius 8
+python demo_animations.py --animation alert --port /dev/ttyUSB0 --message "HELLO"
+# quantity follows an exponential curve where 1.0 approaches a full display
+python demo_animations.py --animation stars --port /dev/ttyUSB0 \
+    --quantity 0.4 --clustering 0.6 --mode cascade
 ```
 
 ## Developing Animations

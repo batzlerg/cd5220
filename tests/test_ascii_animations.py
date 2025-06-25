@@ -1,22 +1,22 @@
 import pytest
 from unittest.mock import Mock, patch
+import random
 
-from cd5220 import (
-    DiffAnimator,
-    CD5220,
-    DisplaySimulator,
-    bouncing_ball_animation,
-    progress_bar_animation,
-    spinning_loader,
-    wave_animation,
-    matrix_rain_animation,
-    spinner_tapestry,
-    cloud_conveyor,
-    zen_breathing,
-    firework_bursts,
-    typewriter_animation,
-    pulsing_alert,
-    CD5220ASCIIAnimations,
+from cd5220 import DiffAnimator, CD5220, DisplaySimulator
+from animations import (
+    bounce,
+    progress,
+    loader,
+    matrix,
+    tapestry,
+    clouds,
+    zen,
+    fireworks,
+    stars,
+    typewriter,
+    alert,
+    ASCIIAnimations,
+    StarMode,
 )
 
 
@@ -60,29 +60,29 @@ def test_render_frame_calls_display(animator):
 
 
 def test_basic_animations_call_write(animator):
-    bouncing_ball_animation(animator, duration=0.1)
-    progress_bar_animation(animator, duration=0.1)
-    spinning_loader(animator, duration=0.1)
-    wave_animation(animator, duration=0.1)
-    matrix_rain_animation(animator, duration=0.1)
-    spinner_tapestry(animator, duration=0.1)
-    cloud_conveyor(animator, duration=0.1)
-    zen_breathing(animator, duration=0.1)
-    firework_bursts(animator, duration=0.1)
+    bounce(animator, duration=0.1)
+    progress(animator, duration=0.1)
+    loader(animator, duration=0.1)
+    matrix(animator, duration=0.1)
+    tapestry(animator, duration=0.1)
+    clouds(animator, duration=0.1)
+    zen(animator, duration=0.1)
+    fireworks(animator, duration=0.1)
+    stars(animator, duration=0.1)
     assert animator.display.write_positioned.called
     assert not animator.display.write_both_lines.called
 
 
 def test_typewriter_and_pulse_use_display(animator):
-    typewriter_animation(animator, 'TEST', line=0)
-    pulsing_alert(animator, 'ALERT', duration=0.2)
+    typewriter(animator, 'TEST', line=0)
+    alert(animator, 'ALERT', duration=0.2)
     assert animator.display.write_positioned.called
     assert not animator.display.write_both_lines.called
     assert animator.display.set_brightness.called
 
 
 def test_wrapper_instantiation(mock_display):
-    library = CD5220ASCIIAnimations(
+    library = ASCIIAnimations(
         mock_display,
         sleep_fn=lambda _ : None,
         frame_sleep_fn=lambda _ : None,
@@ -101,12 +101,12 @@ def test_custom_sleep_functions(animator, mock_display):
         frame_rate=2,
         enable_simulator=True,
     )
-    bouncing_ball_animation(animator, duration=0.5)
+    bounce(animator, duration=0.5)
     assert frame_calls
 
 
 def test_spinning_loader_updates_spinner_only(animator):
-    spinning_loader(animator, duration=0.2)
+    loader(animator, duration=0.2)
     display = animator.display
     # Should not use viewport or string mode helpers
     assert not display.set_window.called
@@ -133,7 +133,7 @@ def test_progress_bar_exits_string_mode():
              patch.object(display, 'write_positioned') as wp, \
              patch.object(display, 'cancel_current_line') as cc, \
              patch.object(display, 'clear_display') as cd:
-            progress_bar_animation(animator, duration=0.1)
+            progress(animator, duration=0.1)
             assert not wb.called
             assert cd.call_count == 0
 
@@ -146,7 +146,7 @@ def test_display_simulator_diff():
 
 
 def test_progress_bar_static_elements(animator):
-    progress_bar_animation(animator, duration=0.1)
+    progress(animator, duration=0.1)
     sim = animator.simulator
     assert sim is not None
     sim.assert_char_at(4, 1, '[')
@@ -160,7 +160,7 @@ def test_simulator_assertions_and_access(mock_display):
     animator.enable_testing_mode()
     sim = animator.get_simulator()
     assert isinstance(sim, DisplaySimulator)
-    progress_bar_animation(animator, duration=0.1)
+    progress(animator, duration=0.1)
     sim.assert_line_contains(0, "COMPLETE")
     sim.assert_line_equals(1, "    [==========]    ")
     sim.assert_static_preserved([(4, 1, '['), (15, 1, ']')])
@@ -186,5 +186,45 @@ def test_console_render_outputs_frames(capsys, mock_display):
     # console render should update in place with escape sequences
     assert sep in out2
     assert "BYE" in out2
+
+
+def test_stars_spawn_on_display(animator, monkeypatch):
+    monkeypatch.setattr(random, 'random', lambda: 0.0)
+    stars(animator, duration=0.2)
+    sim = animator.get_simulator()
+    assert sim is not None
+    combined = sim.get_line(0) + sim.get_line(1)
+    assert any(ch != ' ' for ch in combined)
+
+
+def test_stars_high_quantity(animator, monkeypatch):
+    monkeypatch.setattr(random, 'random', lambda: 0.0)
+    stars(animator, duration=1.0, quantity=1.0, clustering=1.0)
+    sim = animator.get_simulator()
+    assert sim is not None
+    combined = sim.get_line(0) + sim.get_line(1)
+    active_count = sum(ch != ' ' for ch in combined)
+    assert active_count >= 35
+
+
+def _run_stars(mode, duration=2.0, qty=0.3, cluster=1.0):
+    from animations import stars, StarMode
+    from cd5220 import DiffAnimator
+    disp = Mock()
+    anim = DiffAnimator(disp, sleep_fn=lambda _ : None,
+                        frame_sleep_fn=lambda _ : None,
+                        enable_simulator=True, frame_rate=1)
+    random.seed(0)
+    stars(anim, duration=duration, quantity=qty, clustering=cluster, mode=mode)
+    sim = anim.get_simulator()
+    return sim.get_display()
+
+
+def test_star_modes_distinct():
+    normal = _run_stars(StarMode.NORMAL)
+    cascade = _run_stars(StarMode.CASCADE)
+    assert normal != cascade
+    assert normal == ('.+             .    ', '                    ')
+    assert cascade == ('                    ', '          +     + + ')
 
 

@@ -12,7 +12,7 @@ def mock_display():
 
 def test_demo_ascii_invokes_all(monkeypatch, mock_display):
     fake_anim = MagicMock()
-    monkeypatch.setattr(demo, "CD5220ASCIIAnimations", lambda *a, **k: fake_anim)
+    monkeypatch.setattr(demo, "ASCIIAnimations", lambda *a, **k: fake_anim)
     with patch('time.sleep'):
         demo.demo_ascii_animations(mock_display, 0.1)
     fake_anim.play_startup_sequence.assert_called_once()
