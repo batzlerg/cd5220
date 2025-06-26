@@ -40,9 +40,9 @@ sim.assert_line_contains(0, "EXPECTED")
 
 The simulator tracks the display state and provides assertion helpers. For interactive debugging, instantiate ``DiffAnimator`` with ``render_console=True`` to display the simulator's contents in your terminal and observe each frame as it would appear on hardware. 
 
-``demo_animations.py`` implements this by default with ``--render-console`` to see all built-in animations directly in your terminal. To make the frame output cleaner, it does not output debug logs by default - use ``--debug`` to include verbose logging alongside the frame output.
+``demo_animations.py`` lets you choose any built-in animation by name. Animations loop indefinitely unless a ``--duration`` is provided. Frames are rendered in the console by default; pass ``--no-render-console`` to disable it. Use ``--debug`` for verbose logging.
 
-## 4. Integrate into `CD5220ASCIIAnimations`
+## 4. Integrate into `ASCIIAnimations`
 
 Add a wrapper method that forwards to your new function so demos can call it easily.
 

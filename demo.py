@@ -18,7 +18,7 @@ from cd5220 import (
     CD5220,
     CD5220DisplayError,
     DisplayMode,
-    CD5220ASCIIAnimations,
+    ASCIIAnimations,
 )
 
 logging.basicConfig(
@@ -316,7 +316,7 @@ def demo_convenience_features(display: CD5220, fixture: CD5220DemoFixture):
 def demo_ascii_animations(display: CD5220, fixture: CD5220DemoFixture):
     """Demonstrate ASCII animation library."""
 
-    animations = CD5220ASCIIAnimations(display, sleep_fn=lambda _ : None)
+    animations = ASCIIAnimations(display, sleep_fn=lambda _ : None)
 
     fixture.show_banner("ASCII ANIMATIONS", "STARTUP")
     animations.play_startup_sequence()

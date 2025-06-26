@@ -4,30 +4,32 @@
 import argparse
 import logging
 import time
-from cd5220 import serial
-from cd5220 import CD5220, CD5220DisplayError, CD5220ASCIIAnimations
+import inspect
+from enum import Enum
+
+from cd5220 import serial, CD5220, CD5220DisplayError, DiffAnimator
+from animations import ANIMATIONS
 
 logger = logging.getLogger('CD5220_Animations')
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="CD5220 ASCII animation demo")
+    parser = argparse.ArgumentParser(
+        description="CD5220 ASCII animation demo",
+        allow_abbrev=False,
+    )
+    parser.add_argument('--animation', required=True,
+                        choices=sorted(ANIMATIONS.keys()),
+                        help='Animation to run')
     parser.add_argument('--port', default='/dev/tty.usbserial-A5XK3RJT',
                         help='Serial port device')
     parser.add_argument('--baud', type=int, default=9600,
                         help='Baud rate (default: 9600)')
-    parser.add_argument('--fast', action='store_true',
-                        help='Reduce delays for experienced users')
     parser.add_argument('--render-console', dest='render_console',
                         action='store_true', default=True,
                         help='Render simulator output in the console')
     parser.add_argument('--no-render-console', dest='render_console',
                         action='store_false', help='Disable console rendering')
-    parser.add_argument('--auto-advance', dest='auto_advance', action='store_true',
-                        default=True,
-                        help='Auto-advance between animations (default: enabled)')
-    parser.add_argument('--no-auto-advance', dest='auto_advance', action='store_false',
-                        help='Wait for Enter before exiting')
     parser.add_argument('--base-command-delay', type=float, default=0.0,
                         help='Base command delay in seconds')
     parser.add_argument('--mode-transition-delay', type=float, default=0.0,
@@ -35,9 +37,24 @@ def main() -> None:
     parser.add_argument('--debug', action='store_true',
                         help='Enable verbose debug logging')
 
-    args = parser.parse_args()
+    # parse once to know which animation was chosen
+    args, _ = parser.parse_known_args()
 
-    args.delay_multiplier = 0.3 if args.fast else 1.0
+    anim_func = ANIMATIONS[args.animation]
+    for param in list(inspect.signature(anim_func).parameters.values())[1:]:
+        if param.default is inspect.Parameter.empty:
+            parser.add_argument(
+                f'--{param.name}', required=True, type=str
+            )
+        else:
+            default = param.default
+            if isinstance(default, Enum):
+                parser.add_argument(f'--{param.name}', type=str, default=default.value)
+            else:
+                arg_type = type(default) if default is not None else float
+                parser.add_argument(f'--{param.name}', type=arg_type, default=default)
+
+    args = parser.parse_args()
 
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
@@ -56,18 +73,28 @@ def main() -> None:
             base_command_delay=args.base_command_delay,
             mode_transition_delay=args.mode_transition_delay,
         ) as display:
-            animations = CD5220ASCIIAnimations(
+            animator = DiffAnimator(
                 display,
                 sleep_fn=time.sleep,
                 frame_sleep_fn=time.sleep,
                 render_console=args.render_console,
             )
-            logger.info("Running startup sequence")
-            animations.play_startup_sequence()
-            logger.info("Running animation cycle")
-            animations.play_demo_cycle()
-            if not args.auto_advance:
-                input("Press Enter to exit...")
+            func_kwargs = {}
+            for name, param in inspect.signature(anim_func).parameters.items():
+                if name == 'animator':
+                    continue
+                value = getattr(args, name)
+                default = param.default
+                if isinstance(default, Enum):
+                    values = [v.strip() for v in value.split(',')]
+                    enums = [type(default)(v) for v in values]
+                    func_kwargs[name] = enums if len(enums) > 1 else enums[0]
+                else:
+                    func_kwargs[name] = value
+            logger.info(
+                f"Starting '{args.animation}' animation (press Ctrl+C to stop)"
+            )
+            anim_func(animator, **func_kwargs)
     except CD5220DisplayError as e:
         logger.error(f"Display error: {e}")
     except serial.SerialException as e:
