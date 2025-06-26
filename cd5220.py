@@ -32,7 +32,7 @@ except ModuleNotFoundError:  # pragma: no cover - fallback for test env
 import time
 import logging
 import sys
-from typing import Union, Optional, Dict, Any, Tuple
+from typing import Union, Optional, Dict, Any, Tuple, List, Iterator
 from enum import Enum
 
 logging.basicConfig(
@@ -131,20 +131,24 @@ class CD5220:
     CMD_INTERNATIONAL_FONT = b'\x1B\x66'
     CMD_EXTENDED_FONT = b'\x1B\x63'
 
-    def __init__(self, serial_port: Union[str, serial.Serial], 
-                 baudrate: int = 9600, 
+    def __init__(self, serial_port: Union[str, serial.Serial, None] = None,
+                 baudrate: int = 9600,
                  debug: bool = True,
                  auto_clear_mode_transitions: bool = True,
                  warn_on_mode_transitions: bool = True,
                  # Hardware compatibility delays (normally 0.0)
                  base_command_delay: float = 0.0,
                  mode_transition_delay: float = 0.0,
-                 initialization_delay: float = 0.2):
+                 initialization_delay: float = 0.2,
+                 enable_simulator: bool = True,
+                 hardware_enabled: bool = True,
+                 render_console: bool = False,
+                 console_verbose: bool = False):
         """
         Initialize CD5220 controller.
         
         Args:
-            serial_port: Serial port device or existing Serial object
+            serial_port: Serial port device, existing Serial object, or ``None`` for simulator-only mode
             baudrate: Communication baud rate (default 9600)
             debug: Enable debug logging
             auto_clear_mode_transitions: Auto-clear when mode conflicts occur
@@ -152,6 +156,11 @@ class CD5220:
             base_command_delay: Base delay between commands (seconds, default 0.0)
             mode_transition_delay: Delay for mode changes (seconds, default 0.0)
             initialization_delay: Delay for hardware initialization (seconds, default 0.2)
+            enable_simulator: Create and maintain an in-memory simulator
+            hardware_enabled: Attempt hardware connection when ``serial_port`` is provided
+            render_console: Render simulator state to stdout after each command
+            console_verbose: Show console output even when commands have no
+                visible effect
         """
         self.debug = debug
         self.auto_clear_mode_transitions = auto_clear_mode_transitions
@@ -159,41 +168,71 @@ class CD5220:
         self.base_command_delay = base_command_delay
         self.mode_transition_delay = mode_transition_delay
         self.initialization_delay = initialization_delay
+        self.render_console = render_console
+        self.console_verbose = console_verbose
+        self.simulator: Optional[DisplaySimulator] = DisplaySimulator() if enable_simulator or render_console else None
+        self._first_console_render = True
+        self._last_console_frame: Optional[Tuple[str, str]] = None
+        self.hardware_enabled = False
         self._current_mode = DisplayMode.NORMAL
         # The hardware supports only one active window configuration
         # at a time, tracked as (line, start_col, end_col)
         self._active_window: Optional[Tuple[int, int, int]] = None
+        # Simulator cursor position tracking (1-based)
+        self._sim_x = 1
+        self._sim_y = 1
         
         if debug:
             logger.setLevel(logging.DEBUG)
             logger.debug("Initializing CD5220 controller")
         
         try:
-            if isinstance(serial_port, str):
-                logger.debug(f"Opening serial port: {serial_port} at {baudrate} baud")
-                self.ser = serial.Serial(
-                    port=serial_port,
-                    baudrate=baudrate,
-                    bytesize=8,
-                    parity='N',
-                    stopbits=1,
-                    timeout=1,
-                    write_timeout=1
-                )
+            if hardware_enabled and serial_port is not None:
+                if isinstance(serial_port, str):
+                    logger.debug(f"Opening serial port: {serial_port} at {baudrate} baud")
+                    self.ser = serial.Serial(
+                        port=serial_port,
+                        baudrate=baudrate,
+                        bytesize=8,
+                        parity='N',
+                        stopbits=1,
+                        timeout=1,
+                        write_timeout=1,
+                    )
+                else:
+                    logger.debug("Using existing serial connection")
+                    self.ser = serial_port
+                self.hardware_enabled = True
+                time.sleep(0.1)
+                self._send_command(self.CMD_INITIALIZE, "Initialize display", self.initialization_delay)
+                self.restore_defaults()
             else:
-                logger.debug("Using existing serial connection")
-                self.ser = serial_port
-            
-            time.sleep(0.1)
-            self._send_command(self.CMD_INITIALIZE, "Initialize display", self.initialization_delay)
-            self.restore_defaults()
-            
+                self.ser = None
+                if self.simulator:
+                    self._parse_and_apply_command(self.CMD_INITIALIZE)
+                    self._parse_and_apply_command(self.CMD_CLEAR)
+
         except (serial.SerialException, serial.SerialTimeoutException) as e:
             logger.error(f"Serial connection failed: {e}")
             raise CD5220DisplayError(f"Serial connection failed: {e}")
         except Exception as e:
             logger.error(f"Initialization failed: {e}")
             raise CD5220DisplayError(f"Initialization failed: {e}")
+
+    @classmethod
+    def create_hardware_only(cls, port: str, **kwargs) -> "CD5220":
+        """Factory for hardware-only operation."""
+        return cls(port, enable_simulator=False, hardware_enabled=True, **kwargs)
+
+    @classmethod
+    def create_simulator_only(cls, **kwargs) -> "CD5220":
+        """Factory for simulator-only operation."""
+        return cls(None, enable_simulator=True, hardware_enabled=False, **kwargs)
+
+    @classmethod
+    def create_validation_mode(cls, port: str, **kwargs) -> "CD5220":
+        """Factory for hardware + simulator validation mode."""
+        return cls(port, enable_simulator=True, hardware_enabled=True, **kwargs)
 
     def _send_command(self, command: bytes, description: str = "Command", delay: float = None) -> None:
         """
@@ -207,18 +246,36 @@ class CD5220:
         try:
             if delay is None:
                 delay = self.base_command_delay
-            
+
             hex_str = ' '.join(f'{byte:02X}' for byte in command)
             logger.debug(f"Sending: {description} | Bytes: {hex_str} | Delay: {delay:.3f}s")
-            
-            self.ser.write(command)
-            self.ser.flush()
-            
+
+            if self.hardware_enabled and self.ser:
+                self.ser.write(command)
+                self.ser.flush()
+
+            if self.simulator:
+                before = self.simulator.get_display()
+                self._parse_and_apply_command(command)
+                after = self.simulator.get_display()
+                if self.render_console:
+                    changed = before != after
+                    self._render_console_state(description, changed)
+
             if delay > 0:
                 time.sleep(delay)
         except (serial.SerialException, serial.SerialTimeoutException) as e:
             logger.error(f"Command failed: {e}")
             raise CD5220DisplayError(f"Command failed: {e}")
+
+    def _sync_simulator_mode(self) -> None:
+        """Synchronize simulator mode with current hardware mode."""
+        if self.simulator:
+            self.simulator.set_mode(self._current_mode)
+            if self._active_window is None:
+                self.simulator.clear_window_state()
+            else:
+                self.simulator.set_window(*self._active_window)
 
     @property
     def current_mode(self) -> DisplayMode:
@@ -241,6 +298,201 @@ class CD5220:
             'initialization_delay': self.initialization_delay,
             'active_window': self.active_window
         }
+
+    # ------------------------------------------------------------------
+    # Simulator helpers
+    # ------------------------------------------------------------------
+
+    def _parse_and_apply_command(self, command: bytes) -> None:
+        """Mirror commands to the internal ``DisplaySimulator``."""
+        if not self.simulator:
+            return
+
+        # ------------------------------------------------------------------
+        # Display clearing and initialization
+        # ------------------------------------------------------------------
+        if command in (self.CMD_CLEAR, self.CMD_INITIALIZE):
+            self.simulator.clear()
+            self._sim_x = 1
+            self._sim_y = 1
+            self.simulator.set_mode(DisplayMode.NORMAL)
+            self.simulator.clear_window_state()
+            return
+
+        if command == self.CMD_CANCEL:
+            self.simulator.lines[self._sim_y - 1] = list(" " * self.DISPLAY_WIDTH)
+            self._sim_x = 1
+            self.simulator.set_mode(DisplayMode.NORMAL)
+            self.simulator.viewport_buffer = ""
+            return
+
+        # ------------------------------------------------------------------
+        # Fast string mode writes
+        # ------------------------------------------------------------------
+        if command.startswith(self.CMD_STRING_UPPER) and len(command) >= 24:
+            text = command[len(self.CMD_STRING_UPPER):-1].decode('ascii', 'ignore')
+            self.simulator.lines[0] = list(text.ljust(self.DISPLAY_WIDTH))
+            self._sim_x = 1
+            self._sim_y = 1
+            self.simulator.set_mode(DisplayMode.STRING)
+            return
+
+        if command.startswith(self.CMD_STRING_LOWER) and len(command) >= 24:
+            text = command[len(self.CMD_STRING_LOWER):-1].decode('ascii', 'ignore')
+            self.simulator.lines[1] = list(text.ljust(self.DISPLAY_WIDTH))
+            self._sim_x = 1
+            self._sim_y = 2
+            self.simulator.set_mode(DisplayMode.STRING)
+            return
+
+        # ------------------------------------------------------------------
+        # Scroll mode writes (marquee)
+        # ------------------------------------------------------------------
+        if command.startswith(self.CMD_SCROLL_MARQUEE) and command.endswith(b"\x0D"):
+            text = command[len(self.CMD_SCROLL_MARQUEE):-1].decode("ascii", "ignore")
+            self.simulator.lines[0] = list(text.ljust(self.DISPLAY_WIDTH)[:self.DISPLAY_WIDTH])
+            self.simulator.set_scroll_text(text)
+            self._sim_x = 1
+            self._sim_y = 1
+            self.simulator.set_mode(DisplayMode.SCROLL)
+            return
+
+        # ------------------------------------------------------------------
+        # Window management
+        # ------------------------------------------------------------------
+        if command.startswith(self.CMD_WINDOW_SET) and len(command) == 6:
+            op = command[2]
+            start = command[3] + 1
+            end = command[4] + 1
+            line = command[5]
+            if op:
+                self.simulator.set_window(line, start, end)
+            else:
+                self.simulator.clear_window_state()
+            return
+
+        # ------------------------------------------------------------------
+        # Cursor movement and positioning
+        # ------------------------------------------------------------------
+        if command.startswith(self.CMD_CURSOR_POSITION) and len(command) == 4:
+            self._sim_x = command[2]
+            self._sim_y = command[3]
+            return
+
+        if command == self.CMD_CURSOR_HOME:
+            self._sim_x = 1
+            self._sim_y = 1
+            return
+
+        if command == self.CMD_CURSOR_LEFT and self._sim_x > 1:
+            self._sim_x -= 1
+            return
+
+        if command == self.CMD_CURSOR_RIGHT and self._sim_x < self.DISPLAY_WIDTH:
+            self._sim_x += 1
+            return
+
+        if command == self.CMD_CURSOR_UP and self._sim_y > 1:
+            self._sim_y -= 1
+            return
+
+        if command == self.CMD_CURSOR_DOWN and self._sim_y < self.DISPLAY_HEIGHT:
+            self._sim_y += 1
+            return
+
+        # ------------------------------------------------------------------
+        # Display state commands
+        # ------------------------------------------------------------------
+        if command.startswith(self.CMD_BRIGHTNESS) and len(command) == 3:
+            level = command[2]
+            self.simulator.set_brightness_level(level)
+            return
+
+        if command == self.CMD_DISPLAY_ON:
+            self.simulator.set_display_on(True)
+            return
+
+        if command == self.CMD_DISPLAY_OFF:
+            self.simulator.set_display_on(False)
+            return
+
+        if command == self.CMD_CURSOR_ON:
+            self.simulator.set_cursor_visible(True)
+            return
+
+        if command == self.CMD_CURSOR_OFF:
+            self.simulator.set_cursor_visible(False)
+            return
+
+        # ------------------------------------------------------------------
+        # Mode commands
+        # ------------------------------------------------------------------
+        if command == self.CMD_OVERWRITE_MODE:
+            self.simulator.set_mode(DisplayMode.NORMAL)
+            return
+
+        if command == self.CMD_HORIZONTAL_SCROLL:
+            # Actual target mode will be synced by high level API
+            self.simulator.set_mode(DisplayMode.SCROLL)
+            return
+
+        if command == self.CMD_VERTICAL_SCROLL:
+            self.simulator.set_mode(DisplayMode.SCROLL)
+            return
+
+        # ------------------------------------------------------------------
+        # Printable text output
+        # ------------------------------------------------------------------
+        if all(32 <= b <= 126 for b in command):
+            text = command.decode('ascii')
+            for ch in text:
+                if (
+                    self.simulator.current_mode == DisplayMode.VIEWPORT
+                    and self.simulator.active_window
+                    and self._sim_y == self.simulator.active_window[0]
+                ):
+                    line, start, end = self.simulator.active_window
+                    width = end - start + 1
+                    self.simulator.viewport_buffer += ch
+                    window_text = self.simulator.viewport_buffer[-width:]
+                    padded = window_text.ljust(width)
+                    for i, c in enumerate(padded):
+                        self.simulator.set_char(start - 1 + i, line - 1, c)
+                elif self.simulator.current_mode != DisplayMode.VIEWPORT:
+                    self.simulator.set_char(self._sim_x - 1, self._sim_y - 1, ch)
+                self._sim_x += 1
+                if self._sim_x > self.DISPLAY_WIDTH:
+                    self._sim_x = 1
+                    if self._sim_y < self.DISPLAY_HEIGHT:
+                        self._sim_y += 1
+            return
+
+    def _render_console_state(self, description: str, changed: bool) -> None:
+        if not self.simulator:
+            return
+        line1, line2 = self.simulator.get_display()
+        frame = (line1, line2)
+        if not changed and not self.console_verbose:
+            sys.stdout.write(f"[non-visual] {description}\n")
+            sys.stdout.flush()
+            return
+        sep = "-" * self.DISPLAY_WIDTH
+        if not changed:
+            sys.stdout.write(f"[non-visual] {description}\n")
+        if self._first_console_render:
+            sys.stdout.write(sep + "\n")
+            sys.stdout.write(line1 + "\n")
+            sys.stdout.write(line2 + "\n")
+            sys.stdout.write(sep + "\n")
+            self._first_console_render = False
+        else:
+            sys.stdout.write("\x1b[4A")
+            sys.stdout.write("\x1b[2K" + sep + "\n")
+            sys.stdout.write("\x1b[2K" + line1 + "\n")
+            sys.stdout.write("\x1b[2K" + line2 + "\n")
+            sys.stdout.write("\x1b[2K" + sep + "\n")
+        sys.stdout.flush()
+        self._last_console_frame = frame
 
     def _ensure_normal_mode(self, operation: str, force_clear: bool = False) -> bool:
         """Ensure display is in normal mode for operations that require it."""
@@ -274,11 +526,13 @@ class CD5220:
         self._send_command(self.CMD_CLEAR, "Clear display", delay)
         self._current_mode = DisplayMode.NORMAL
         self._active_window = None
+        self._sync_simulator_mode()
 
     def cancel_current_line(self, delay: float = None) -> None:
         """Cancel current line and return to normal mode."""
         self._send_command(self.CMD_CANCEL, "Cancel current line", delay)
         self._current_mode = DisplayMode.NORMAL
+        self._sync_simulator_mode()
 
     def initialize(self, delay: float = None) -> None:
         """Initialize display and return to normal mode."""
@@ -287,6 +541,7 @@ class CD5220:
         self._send_command(self.CMD_CLEAR, "Clear after init", delay)
         self._current_mode = DisplayMode.NORMAL
         self._active_window = None
+        self._sync_simulator_mode()
 
     def restore_defaults(self, delay: float = None) -> None:
         """Restore factory defaults: brightness 4, overwrite mode, cursor off."""
@@ -421,6 +676,7 @@ class CD5220:
         cmd = self.CMD_STRING_UPPER + padded_text.encode('ascii', 'ignore') + b'\x0D'
         self._send_command(cmd, f"String upper: '{text}'", delay)
         self._current_mode = DisplayMode.STRING
+        self._sync_simulator_mode()
 
     def write_lower_line(self, text: str, delay: float = None) -> None:
         """
@@ -436,6 +692,7 @@ class CD5220:
         cmd = self.CMD_STRING_LOWER + padded_text.encode('ascii', 'ignore') + b'\x0D'
         self._send_command(cmd, f"String lower: '{text}'", delay)
         self._current_mode = DisplayMode.STRING
+        self._sync_simulator_mode()
 
     def write_both_lines(self, upper: str, lower: str, delay: float = None) -> None:
         """
@@ -465,6 +722,7 @@ class CD5220:
         cmd = self.CMD_SCROLL_MARQUEE + text.encode('ascii', 'ignore') + b'\x0D'
         self._send_command(cmd, f"Scroll marquee: '{text}'", delay)
         self._current_mode = DisplayMode.SCROLL
+        self._sync_simulator_mode()
         
         if observe_duration is None:
             observe_duration = max(8.0, len(text) / self.SCROLL_REFRESH_RATE * 0.5)
@@ -503,6 +761,7 @@ class CD5220:
             delay,
         )
         self._active_window = (line, start_col, end_col)
+        self._sync_simulator_mode()
 
     def clear_window(self, line: int = 1, delay: float = None) -> None:
         """Clear the active window (normal mode only)."""
@@ -515,6 +774,7 @@ class CD5220:
         self._send_command(cmd, f"Clear window: line {line}", delay)
 
         self._active_window = None
+        self._sync_simulator_mode()
 
 
     def enter_viewport_mode(self, delay: float = None) -> None:
@@ -532,6 +792,7 @@ class CD5220:
         self._ensure_normal_mode("Viewport mode entry")
         self.set_horizontal_scroll_mode(delay)
         self._current_mode = DisplayMode.VIEWPORT
+        self._sync_simulator_mode()
         
         logger.info(
             f"Entered viewport mode with window: line {self._active_window[0]},"
@@ -621,7 +882,7 @@ class CD5220:
 
     def close(self) -> None:
         """Close serial connection."""
-        if hasattr(self, 'ser') and self.ser.is_open:
+        if getattr(self, 'ser', None) is not None and self.ser.is_open:
             try:
                 logger.debug("Closing serial connection")
                 self.ser.close()
@@ -649,9 +910,17 @@ class DisplaySimulator:
     def __init__(self) -> None:
         self.lines: List[List[str]] = [list(" " * 20), list(" " * 20)]
         self.frame_history: List[dict] = []
+        self.current_mode: DisplayMode = DisplayMode.NORMAL
+        self.active_window: Optional[Tuple[int, int, int]] = None
+        self.scroll_text: Optional[str] = None
+        self.viewport_buffer: str = ""
+        self.brightness: int = 4
+        self.display_on: bool = True
+        self.cursor_visible: bool = False
 
     def clear(self) -> None:
         self.lines = [list(" " * 20), list(" " * 20)]
+        self.viewport_buffer = ""
 
     def set_char(self, x: int, y: int, ch: str) -> None:
         if 0 <= x < 20 and 0 <= y < 2:
@@ -675,6 +944,30 @@ class DisplaySimulator:
             'new_state': self.get_display(),
             'changes': changes,
         })
+
+    # --- state helpers ---
+    def set_mode(self, mode: DisplayMode) -> None:
+        self.current_mode = mode
+
+    def set_window(self, line: int, start: int, end: int) -> None:
+        self.active_window = (line, start, end)
+        self.viewport_buffer = ""
+
+    def clear_window_state(self) -> None:
+        self.active_window = None
+        self.viewport_buffer = ""
+
+    def set_scroll_text(self, text: str) -> None:
+        self.scroll_text = text
+
+    def set_brightness_level(self, level: int) -> None:
+        self.brightness = level
+
+    def set_display_on(self, on: bool) -> None:
+        self.display_on = on
+
+    def set_cursor_visible(self, visible: bool) -> None:
+        self.cursor_visible = visible
 
     def diff(self, new_lines: List[str]) -> Iterator[Tuple[int, int, str]]:
         for y in range(2):
@@ -706,6 +999,21 @@ class DisplaySimulator:
     def assert_static_preserved(self, positions: List[Tuple[int, int, str]]) -> None:
         for x, y, char in positions:
             self.assert_char_at(x, y, char)
+
+    def assert_brightness(self, level: int) -> None:
+        assert self.brightness == level, (
+            f"Brightness expected {level}, got {self.brightness}"
+        )
+
+    def assert_display_on(self, on: bool = True) -> None:
+        assert self.display_on is on, (
+            f"Display on expected {on}, got {self.display_on}"
+        )
+
+    def assert_cursor_visible(self, visible: bool = True) -> None:
+        assert self.cursor_visible is visible, (
+            f"Cursor visibility expected {visible}, got {self.cursor_visible}"
+        )
 
     def dump(self) -> str:
         return f"Line 1: '{self.get_line(0)}'\nLine 2: '{self.get_line(1)}'"

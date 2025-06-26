@@ -444,5 +444,30 @@ class TestCD5220ErrorHandling:
             with pytest.raises(CD5220DisplayError, match="No windows configured"):
                 display.enter_viewport_mode()
 
+
+class TestCD5220Simulator:
+    """Tests for the built-in simulator functionality."""
+
+    def test_default_simulator_creation(self):
+        display = CD5220(debug=False)
+        assert display.simulator is not None
+
+        display.clear_display()
+        sim = display.simulator
+        assert sim.get_line(0).strip() == ""
+
+    def test_factory_helpers(self):
+        sim_only = CD5220.create_simulator_only(debug=False)
+        assert sim_only.hardware_enabled is False
+        assert sim_only.simulator is not None
+
+        with patch('cd5220.serial.Serial') as mock_serial:
+            mock_serial.return_value.is_open = True
+            hw_only = CD5220.create_hardware_only('port', debug=False)
+            assert hw_only.simulator is None
+
+            validation = CD5220.create_validation_mode('port', debug=False)
+            assert validation.simulator is not None
+
 if __name__ == '__main__':
     pytest.main([__file__, '-v'])

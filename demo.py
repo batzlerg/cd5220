@@ -382,8 +382,8 @@ def run_comprehensive_demo(display: CD5220, config):
 def main():
     """Main demo execution with CLI configuration."""
     parser = argparse.ArgumentParser(description="CD5220 VFD Display Demo")
-    parser.add_argument('--port', default='/dev/tty.usbserial-A5XK3RJT', 
-                       help='Serial port device')
+    parser.add_argument('--port', default=None,
+                        help='Serial port device (omit for simulator only)')
     parser.add_argument('--baud', type=int, default=9600, 
                        help='Baud rate (default: 9600)')
     parser.add_argument('--fast', action='store_true', 
@@ -398,6 +398,12 @@ def main():
                        help='Mode transition delay in seconds (default: 0.0)')
     parser.add_argument('--verbose', action='store_true',
                        help='Enable verbose debug logging')
+    parser.add_argument('--console', action='store_true',
+                       help='Render simulator output in the console')
+    parser.add_argument('--console-verbose', action='store_true',
+                       help='Show console frames even for non-visual commands')
+    parser.add_argument('--hardware-only', action='store_true',
+                       help='Disable simulator when a port is provided')
     
     args = parser.parse_args()
     
@@ -414,15 +420,33 @@ def main():
     logger.info(f"Base command delay: {args.base_command_delay}s | Mode transition delay: {args.mode_transition_delay}s")
     
     try:
-        with CD5220(
-            args.port, 
-            args.baud, 
-            debug=args.verbose,
-            auto_clear_mode_transitions=True,
-            warn_on_mode_transitions=True,
-            base_command_delay=args.base_command_delay,
-            mode_transition_delay=args.mode_transition_delay
-        ) as display:
+        if args.hardware_only and not args.port:
+            parser.error('--hardware-only requires --port')
+
+        if args.port:
+            if args.hardware_only:
+                factory = CD5220.create_hardware_only
+            else:
+                factory = CD5220.create_validation_mode
+            display = factory(
+                args.port,
+                baudrate=args.baud,
+                debug=args.verbose,
+                base_command_delay=args.base_command_delay,
+                mode_transition_delay=args.mode_transition_delay,
+                render_console=args.console,
+                console_verbose=args.console_verbose,
+            )
+        else:
+            display = CD5220.create_simulator_only(
+                debug=args.verbose,
+                base_command_delay=args.base_command_delay,
+                mode_transition_delay=args.mode_transition_delay,
+                render_console=args.console,
+                console_verbose=args.console_verbose,
+            )
+
+        with display:
             logger.info("Display initialized")
             run_comprehensive_demo(display, args)
             logger.info("Demo completed successfully!")

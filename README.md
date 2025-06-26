@@ -4,6 +4,8 @@ Python library for controlling VFD (Vacuum Fluorescent Display) hardware which r
 
 **Disclaimer**: validated on a single display by a single developer, may be incomplete for your use case. Pull requests welcome.
 
+The hardware tested only supports the 95 printable ASCII characters (codes 32-126). Extended characters are not guaranteed to render correctly.
+
 ## Overview
 
 Controls 2×20 character VFD displays with features including:
@@ -13,8 +15,9 @@ Controls 2×20 character VFD displays with features including:
 - Viewport overflow scrolling with a single window constraint
 - Fast string writing modes
 - Diff‑based ASCII animations via `DiffAnimator`
+- Built-in simulator for hardware-free development
 - Optional `DisplaySimulator` for animation testing
-- In-terminal console rendering of animations for visual debugging
+- In-terminal console rendering for debugging. Frames are shown only when text changes; non-visual commands log a note. Use `--console-verbose` to render unchanged frames.
 
 ## Installation
 
@@ -43,14 +46,22 @@ display.enter_viewport_mode()
 display.write_viewport(line, text, char_delay=None)
 ```
 
-### basic
+### basic (simulator)
+```python
+from cd5220 import CD5220
+
+display = CD5220()  # simulator only
+display.write_both_lines("Hello", "World!")
+```
+
+### basic (hardware)
 ```python
 from cd5220 import CD5220
 
 with CD5220('/dev/ttyUSB0') as display:
     # fast string writing
     display.write_both_lines("Hello", "World!")
-    
+
     # positioned text
     display.clear_display()
     display.write_positioned("CD5220 Demo", 1, 1)
@@ -121,6 +132,23 @@ python demo.py --port /dev/ttyUSB0 --demo scrolling --fast
 python demo.py --port /dev/ttyUSB0 --demo ascii
 python demo_animations.py --port /dev/ttyUSB0
 python demo_animations.py --port /dev/ttyUSB0 --debug
+
+# simulator console output
+python demo.py --console                # simulator only
+python demo.py --port /dev/ttyUSB0 --console  # console + hardware
+python demo.py --console --console-verbose    # console with non-visual frames
+python demo.py --port /dev/ttyUSB0 --hardware-only  # hardware only
+```
+
+### Hardware Validation Tests
+
+Run interactive validation to verify hardware output matches the built-in simulator. Spaces are shown using `\xb7` (middle dot) and marquee scrolling regions use `\u2190` (left arrow). Brightness level and cursor visibility are printed alongside the expected text so you can confirm non-textual settings. Whether the display is on or off is implied by whether any characters are shown. After each case the script asks whether the hardware matched and finally prints a formatted results table. Use `--case` to run a single validation by ID. Provide the serial port via the `VALIDATE_PORT` environment variable or as a command-line argument:
+
+```bash
+python validate_manual.py /dev/ttyUSB0
+python validate_manual.py /dev/ttyUSB0 --case CURSOR
+python validate_manual.py /dev/ttyUSB0 --case STATE
+python validate_manual.py /dev/ttyUSB0 --console --console-verbose
 ```
 
 ## Developing Animations
