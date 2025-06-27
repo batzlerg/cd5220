@@ -25,14 +25,14 @@ def test_basic_line_writing(display):
     sim = display.simulator
     display.write_upper_line("HELLO")
     display.write_lower_line("WORLD")
-    sim.assert_line_equals(0, "HELLO")
-    sim.assert_line_equals(1, "WORLD")
+    sim.assert_line_equals(1, "HELLO")
+    sim.assert_line_equals(2, "WORLD")
 
 
 def test_positioned_writing(display):
     sim = display.simulator
     display.write_positioned("X", 5, 2)
-    sim.assert_char_at(4, 1, "X")
+    sim.assert_char_at(5, 2, "X")
 
 
 def test_cursor_moves_and_text(display):
@@ -41,8 +41,8 @@ def test_cursor_moves_and_text(display):
     display.write_at_cursor("A")
     display.cursor_move_right()
     display.write_at_cursor("B")
-    sim.assert_char_at(1, 0, "A")
-    sim.assert_char_at(3, 0, "B")
+    sim.assert_char_at(2, 1, "A")
+    sim.assert_char_at(4, 1, "B")
 
 
 def test_cursor_repositioning_sequence(display):
@@ -54,7 +54,7 @@ def test_cursor_repositioning_sequence(display):
         display.set_cursor_position(col, row)
         display.write_at_cursor(str(i + 1))
     expected = "1   2    3    4    5"
-    sim.assert_line_equals(1, expected)
+    sim.assert_line_equals(2, expected)
 
 
 def test_clear_and_cancel(display):
@@ -63,11 +63,11 @@ def test_clear_and_cancel(display):
     display.write_positioned("BBBB", 1, 2)
     display.set_cursor_position(1, 2)
     display.cancel_current_line()
-    sim.assert_line_equals(0, "AAAA")
-    sim.assert_line_equals(1, "")
+    sim.assert_line_equals(1, "AAAA")
+    sim.assert_line_equals(2, "")
     display.clear_display()
-    sim.assert_line_equals(0, "")
     sim.assert_line_equals(1, "")
+    sim.assert_line_equals(2, "")
 
 
 def test_viewport_writing(display):
@@ -75,35 +75,35 @@ def test_viewport_writing(display):
     display.set_window(1, 5, 10)
     display.enter_viewport_mode()
     display.write_viewport(1, "TEST")
-    sim.assert_region_equals(4, 0, 4, "TEST")
+    sim.assert_region_equals(5, 1, 4, "TEST")
 
 def test_viewport_overflow_shows_last_chars(display):
     sim = display.simulator
     display.set_window(1, 4, 10)
     display.enter_viewport_mode()
     display.write_viewport(1, "VIEWPORTTEXT")
-    sim.assert_region_equals(3, 0, 7, "ORTTEXT")
+    sim.assert_region_equals(4, 1, 7, "ORTTEXT")
 
 
 def test_display_message_string(display):
     sim = display.simulator
     display.display_message("HELLO WORLD LOWER LINE2", duration=0, mode="string")
-    sim.assert_line_contains(0, "HELLO")
-    sim.assert_line_contains(1, "NE2")
+    sim.assert_line_contains(1, "HELLO")
+    sim.assert_line_contains(2, "NE2")
 
 
 def test_restore_defaults(display):
     sim = display.simulator
     display.write_upper_line("DATA")
     display.restore_defaults()
-    sim.assert_line_equals(0, "")
     sim.assert_line_equals(1, "")
+    sim.assert_line_equals(2, "")
 
 
 def test_scroll_marquee_parsing(display):
     sim = display.simulator
     display.scroll_marquee("SCROLLING")
-    sim.assert_line_contains(0, "SCROLLING"[:20])
+    sim.assert_line_contains(1, "SCROLLING"[:20])
     assert sim.scroll_text == "SCROLLING"
     assert sim.current_mode == DisplayMode.SCROLL
 
@@ -159,8 +159,8 @@ def test_complex_sequence(display):
     display.cursor_on()
     display.display_off()
     display.display_on()
-    sim.assert_line_equals(0, "HELLO")
-    sim.assert_line_equals(1, "")
+    sim.assert_line_equals(1, "HELLO")
+    sim.assert_line_equals(2, "")
     sim.assert_brightness(3)
     sim.assert_display_on(True)
     sim.assert_cursor_visible(True)

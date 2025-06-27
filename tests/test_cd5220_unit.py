@@ -454,7 +454,7 @@ class TestCD5220Simulator:
 
         display.clear_display()
         sim = display.simulator
-        assert sim.get_line(0).strip() == ""
+        assert sim.get_line(1).strip() == ""
 
     def test_factory_helpers(self):
         sim_only = CD5220.create_simulator_only(debug=False)

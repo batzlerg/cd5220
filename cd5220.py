@@ -457,9 +457,11 @@ class CD5220:
                     window_text = self.simulator.viewport_buffer[-width:]
                     padded = window_text.ljust(width)
                     for i, c in enumerate(padded):
-                        self.simulator.set_char(start - 1 + i, line - 1, c)
+                        # DisplaySimulator uses 1-based coordinates
+                        self.simulator.set_char(start + i, line, c)
                 elif self.simulator.current_mode != DisplayMode.VIEWPORT:
-                    self.simulator.set_char(self._sim_x - 1, self._sim_y - 1, ch)
+                    # DisplaySimulator uses 1-based coordinates
+                    self.simulator.set_char(self._sim_x, self._sim_y, ch)
                 self._sim_x += 1
                 if self._sim_x > self.DISPLAY_WIDTH:
                     self._sim_x = 1
@@ -901,7 +903,10 @@ from typing import List, Iterator, Tuple, Optional
 
 
 class DisplaySimulator:
-    """In-memory model of the 2x20 display for testing animations."""
+    """In-memory model of the 2x20 display for testing animations.
+
+    Public methods use 1-based coordinates for all positions.
+    """
 
     def __init__(self) -> None:
         self.lines: List[List[str]] = [list(" " * 20), list(" " * 20)]
@@ -919,14 +924,16 @@ class DisplaySimulator:
         self.viewport_buffer = ""
 
     def set_char(self, x: int, y: int, ch: str) -> None:
-        if 0 <= x < 20 and 0 <= y < 2:
-            self.lines[y][x] = ch
+        """Set a character using 1-based coordinates."""
+        if 1 <= x <= 20 and 1 <= y <= 2:
+            self.lines[y - 1][x - 1] = ch
 
     def get_line(self, y: int) -> str:
-        return "".join(self.lines[y])
+        """Return a display line using 1-based indexing."""
+        return "".join(self.lines[y - 1])
 
     def get_display(self) -> Tuple[str, str]:
-        return self.get_line(0), self.get_line(1)
+        return self.get_line(1), self.get_line(2)
 
     def apply_frame(self, line1: str, line2: str) -> None:
         old_state = self.get_display()
@@ -966,16 +973,19 @@ class DisplaySimulator:
         self.cursor_visible = visible
 
     def diff(self, new_lines: List[str]) -> Iterator[Tuple[int, int, str]]:
+        """Yield differences using 1-based coordinates."""
         for y in range(2):
             line = new_lines[y].ljust(20)
             for x, ch in enumerate(line):
                 if self.lines[y][x] != ch:
-                    yield x, y, ch
+                    yield x + 1, y + 1, ch
 
     # Assertion helpers for tests
     def assert_char_at(self, x: int, y: int, expected: str) -> None:
-        actual = self.lines[y][x]
-        assert actual == expected, f"Char at ({x},{y}) expected '{expected}', got '{actual}'"
+        actual = self.lines[y - 1][x - 1]
+        assert actual == expected, (
+            f"Char at ({x},{y}) expected '{expected}', got '{actual}'"
+        )
 
     def assert_line_contains(self, line_num: int, text: str) -> None:
         line = self.get_line(line_num)
@@ -989,8 +999,10 @@ class DisplaySimulator:
         )
 
     def assert_region_equals(self, x: int, y: int, width: int, expected: str) -> None:
-        region = "".join(self.lines[y][x:x+width])
-        assert region == expected, f"Region ({x},{y},{width}) expected '{expected}', got '{region}'"
+        region = "".join(self.lines[y - 1][x - 1:x - 1 + width])
+        assert region == expected, (
+            f"Region ({x},{y},{width}) expected '{expected}', got '{region}'"
+        )
 
     def assert_static_preserved(self, positions: List[Tuple[int, int, str]]) -> None:
         for x, y, char in positions:
@@ -1012,7 +1024,7 @@ class DisplaySimulator:
         )
 
     def dump(self) -> str:
-        return f"Line 1: '{self.get_line(0)}'\nLine 2: '{self.get_line(1)}'"
+        return f"Line 1: '{self.get_line(1)}'\nLine 2: '{self.get_line(2)}'"
 
 
 class DiffAnimator:
@@ -1082,7 +1094,8 @@ class DiffAnimator:
                     self.display.write_positioned(ch, x + 1, y + 1)
                     self.state[y][x] = ch
                     if self.simulator:
-                        self.simulator.set_char(x, y, ch)
+                        # DisplaySimulator expects 1-based positions
+                        self.simulator.set_char(x + 1, y + 1, ch)
         if self.render_console:
             self._render_console()
 

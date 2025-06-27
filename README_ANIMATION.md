@@ -35,7 +35,9 @@ Enable the simulator on a `DiffAnimator` instance to verify output without hardw
 animator = DiffAnimator(mock_display, enable_simulator=True)
 custom_animation(animator)
 sim = animator.get_simulator()
-sim.assert_line_contains(0, "EXPECTED")
+sim.assert_line_contains(1, "EXPECTED")
+
+# DisplaySimulator uses 1-based indexing for all coordinates
 ```
 
 The simulator tracks the display state and provides assertion helpers. For interactive debugging, instantiate ``DiffAnimator`` with ``render_console=True`` to display the simulator's contents in your terminal and observe each frame as it would appear on hardware. 

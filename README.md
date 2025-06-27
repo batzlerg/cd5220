@@ -16,7 +16,7 @@ Controls 2×20 character VFD displays with features including:
 - Fast string writing modes
 - Diff‑based ASCII animations via `DiffAnimator`
 - Built-in simulator for hardware-free development
-- Optional `DisplaySimulator` for animation testing
+- Optional `DisplaySimulator` for animation testing (1-based coordinate API)
 - In-terminal console rendering for debugging. Frames are shown only when text changes; non-visual commands log a note. Use `--console-verbose` to render unchanged frames.
 
 ## Installation
@@ -45,6 +45,9 @@ display.set_window(line, start_col, end_col)
 display.enter_viewport_mode()
 display.write_viewport(line, text, char_delay=None)
 ```
+
+All coordinate parameters (columns and rows) are **1-based**. For example,
+`display.set_cursor_position(1, 1)` moves the cursor to the upper-left corner.
 
 ### basic (simulator)
 ```python

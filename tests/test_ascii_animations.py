@@ -142,15 +142,15 @@ def test_display_simulator_diff():
     sim = DisplaySimulator()
     sim.apply_frame("HELLO", "WORLD")
     changes = list(sim.diff(["HELLO", "THERE"]))
-    assert (0, 1, 'T') in changes
+    assert (1, 2, 'T') in changes
 
 
 def test_progress_bar_static_elements(animator):
     progress(animator, duration=0.1)
     sim = animator.simulator
     assert sim is not None
-    sim.assert_char_at(4, 1, '[')
-    sim.assert_char_at(15, 1, ']')
+    sim.assert_char_at(5, 2, '[')
+    sim.assert_char_at(16, 2, ']')
 
 
 def test_simulator_assertions_and_access(mock_display):
@@ -161,9 +161,9 @@ def test_simulator_assertions_and_access(mock_display):
     sim = animator.get_simulator()
     assert isinstance(sim, DisplaySimulator)
     progress(animator, duration=0.1)
-    sim.assert_line_contains(0, "COMPLETE")
-    sim.assert_line_equals(1, "    [==========]    ")
-    sim.assert_static_preserved([(4, 1, '['), (15, 1, ']')])
+    sim.assert_line_contains(1, "COMPLETE")
+    sim.assert_line_equals(2, "    [==========]    ")
+    sim.assert_static_preserved([(5, 2, '['), (16, 2, ']')])
     assert "Line 1:" in sim.dump()
 
 
@@ -193,7 +193,7 @@ def test_stars_spawn_on_display(animator, monkeypatch):
     stars(animator, duration=0.2)
     sim = animator.get_simulator()
     assert sim is not None
-    combined = sim.get_line(0) + sim.get_line(1)
+    combined = sim.get_line(1) + sim.get_line(2)
     assert any(ch != ' ' for ch in combined)
 
 
@@ -202,7 +202,7 @@ def test_stars_high_quantity(animator, monkeypatch):
     stars(animator, duration=1.0, quantity=1.0, clustering=1.0)
     sim = animator.get_simulator()
     assert sim is not None
-    combined = sim.get_line(0) + sim.get_line(1)
+    combined = sim.get_line(1) + sim.get_line(2)
     active_count = sum(ch != ' ' for ch in combined)
     assert active_count >= 35
 
