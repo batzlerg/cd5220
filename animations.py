@@ -84,7 +84,7 @@ def progress(animator: DiffAnimator, duration: Optional[float] = None) -> None:
 
         animator.write_frame('     COMPLETE!      ', '    [==========]    ')
 
-    if duration is None:
+    if duration is None:  # pragma: no cover - infinite loop for manual demo
         while True:
             run_once()
     else:
@@ -621,7 +621,7 @@ class ASCIIAnimations:
         self.animator.frame_sleep(1)
         self.animator.clear_display()
 
-    def play_demo_cycle(self) -> None:
+    def play_demo_cycle(self) -> None:  # pragma: no cover - demo helper
         animations = [
             ("Bounce", lambda: self.bounce(duration=10)),
             ("Matrix", lambda: self.matrix(duration=10)),
@@ -641,7 +641,7 @@ class ASCIIAnimations:
             func()
             self.animator.frame_sleep(1)
 
-    def play_error_alert(self, error_message: str) -> None:
+    def play_error_alert(self, error_message: str) -> None:  # pragma: no cover - demo helper
         for flash in range(6):
             if flash % 2 == 0:
                 border = '*' * 20

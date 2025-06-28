@@ -23,8 +23,14 @@ Controls 2×20 character VFD displays with features including:
 
 ```bash
 python -m venv venv
-source ./venv/bin/activate
+source ./venv/bin/activate  # activate this env in every new shell
 pip install -r requirements.txt
+```
+
+Activate the virtual environment again whenever you open a new terminal:
+
+```bash
+source ./venv/bin/activate
 ```
 
 ## examples
@@ -124,6 +130,13 @@ with CD5220('/dev/ttyUSB0') as display:
 ```
 
 ## Testing
+
+Always activate the virtual environment before running any tests or demo
+commands:
+
+```bash
+source ./venv/bin/activate
+```
 
 ```bash
 # run unit tests

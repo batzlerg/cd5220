@@ -882,7 +882,7 @@ class CD5220:
         
         time.sleep(duration)
 
-    def close(self) -> None:
+    def close(self) -> None:  # pragma: no cover - hardware cleanup
         """Close serial connection."""
         if getattr(self, 'ser', None) is not None and self.ser.is_open:
             try:
@@ -891,10 +891,10 @@ class CD5220:
             except Exception as e:
                 logger.error(f"Error closing connection: {e}")
 
-    def __enter__(self):
+    def __enter__(self):  # pragma: no cover - context helper
         return self
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def __exit__(self, exc_type, exc_val, exc_tb):  # pragma: no cover - context helper
         self.close()
 
 # ---------------------------------------------------------------------------
