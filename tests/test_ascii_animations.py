@@ -60,15 +60,15 @@ def test_render_frame_calls_display(animator):
 
 
 def test_basic_animations_call_write(animator):
-    bounce(animator, duration=0.1)
-    progress(animator, duration=0.1)
-    loader(animator, duration=0.1)
-    matrix(animator, duration=0.1)
-    tapestry(animator, duration=0.1)
-    clouds(animator, duration=0.1)
-    zen(animator, duration=0.1)
-    fireworks(animator, duration=0.1)
-    stars(animator, duration=0.1)
+    bounce(animator, duration=0.3)
+    progress(animator, duration=0.3)
+    loader(animator, duration=0.3)
+    matrix(animator, duration=0.3)
+    tapestry(animator, duration=0.3)
+    clouds(animator, duration=0.3)
+    zen(animator, duration=0.3)
+    fireworks(animator, duration=0.3)
+    stars(animator, duration=0.3)
     assert animator.display.write_positioned.called
     assert not animator.display.write_both_lines.called
 
@@ -91,6 +91,24 @@ def test_wrapper_instantiation(mock_display):
     assert library.display is mock_display
     assert isinstance(library.animator, DiffAnimator)
 
+
+def test_wrapper_methods_execute(mock_display):
+    library = ASCIIAnimations(
+        mock_display,
+        sleep_fn=lambda _ : None,
+        frame_sleep_fn=lambda _ : None,
+    )
+    library.bounce(duration=0.3)
+    library.progress(duration=0.3)
+    library.loader(duration=0.3)
+    library.matrix(duration=0.3)
+    library.tapestry(duration=0.3)
+    library.clouds(duration=0.3)
+    library.zen(duration=0.3)
+    library.fireworks(duration=0.3)
+    library.stars(duration=0.3)
+    assert mock_display.write_positioned.called
+
 def test_custom_sleep_functions(animator, mock_display):
     sleep_calls = []
     frame_calls = []
@@ -106,7 +124,7 @@ def test_custom_sleep_functions(animator, mock_display):
 
 
 def test_spinning_loader_updates_spinner_only(animator):
-    loader(animator, duration=0.2)
+    loader(animator, duration=0.3)
     display = animator.display
     # Should not use viewport or string mode helpers
     assert not display.set_window.called
@@ -133,7 +151,7 @@ def test_progress_bar_exits_string_mode():
              patch.object(display, 'write_positioned') as wp, \
              patch.object(display, 'cancel_current_line') as cc, \
              patch.object(display, 'clear_display') as cd:
-            progress(animator, duration=0.1)
+            progress(animator, duration=0.3)
             assert not wb.called
             assert cd.call_count == 0
 
@@ -146,7 +164,7 @@ def test_display_simulator_diff():
 
 
 def test_progress_bar_static_elements(animator):
-    progress(animator, duration=0.1)
+    progress(animator, duration=0.3)
     sim = animator.simulator
     assert sim is not None
     sim.assert_char_at(5, 2, '[')
@@ -160,7 +178,7 @@ def test_simulator_assertions_and_access(mock_display):
     animator.enable_testing_mode()
     sim = animator.get_simulator()
     assert isinstance(sim, DisplaySimulator)
-    progress(animator, duration=0.1)
+    progress(animator, duration=0.3)
     sim.assert_line_contains(1, "COMPLETE")
     sim.assert_line_equals(2, "    [==========]    ")
     sim.assert_static_preserved([(5, 2, '['), (16, 2, ']')])
@@ -190,7 +208,7 @@ def test_console_render_outputs_frames(capsys, mock_display):
 
 def test_stars_spawn_on_display(animator, monkeypatch):
     monkeypatch.setattr(random, 'random', lambda: 0.0)
-    stars(animator, duration=0.2)
+    stars(animator, duration=0.3)
     sim = animator.get_simulator()
     assert sim is not None
     combined = sim.get_line(1) + sim.get_line(2)
