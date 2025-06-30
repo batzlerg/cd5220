@@ -156,9 +156,12 @@ python demo_animations.py --animation alert --port /dev/ttyUSB0 --message "HELLO
 # spawn_rate controls how quickly stars appear, spawning that many per frame
 # clustering controls the likelihood of spawning adjacent stars
 # wander controls how often stars relocate when a cycle completes
-python demo_animations.py --animation stars --port /dev/ttyUSB0 \
-    --quantity 20 --clustering 0.6 --full_cycle 0.8 \
-    --spawn_rate 5
+python demo_animations.py --animation stars \
+  --port /dev/tty.usbserial-A5XK3RJT \
+  --quantity 8 \
+  --clustering 0.6 \
+  --spawn_rate 2 \
+  --wander=0.5
 
 # simulator console output
 python demo.py --console                # simulator only
