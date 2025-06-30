@@ -2,23 +2,23 @@
 import random
 import time
 from typing import List, Iterator, Tuple, Optional, Union
-from enum import Enum
 
 from cd5220 import DiffAnimator, DisplaySimulator
+import logging
+import math
+
+logger = logging.getLogger('CD5220_Animations')
+
+
+def _log_animation_start(name: str, **kwargs: object) -> None:
+    """Log the parameters an animation will run with."""
+    params = ", ".join(f"{k}={v}" for k, v in kwargs.items())
+    logger.info("Starting %s animation with %s", name, params)
 
 STAR_PHASES = ['.', '+', '*', '+', '.']
-
-
-class StarMode(Enum):
-    """Available star animation modes."""
-
-    NORMAL = "normal"           # Random twinkling
-    CASCADE = "cascade"         # Falling stars
-
-
-
 def bounce(animator: DiffAnimator, duration: Optional[float] = None) -> None:
     """Bouncing ball with gravity effect."""
+    _log_animation_start('bounce', duration=duration)
     ball_x, ball_y = 0, 0
     vel_x, vel_y = 1, 1
     frame_count = max(1, int(duration * animator.frame_rate)) if duration else None
@@ -59,6 +59,7 @@ def bounce(animator: DiffAnimator, duration: Optional[float] = None) -> None:
 
 def progress(animator: DiffAnimator, duration: Optional[float] = None) -> None:
     """Animated progress bar using write_frame for each step."""
+    _log_animation_start('progress', duration=duration)
     steps = 10
     step_duration = duration / steps if duration else 1.0 / animator.frame_rate
 
@@ -84,7 +85,7 @@ def progress(animator: DiffAnimator, duration: Optional[float] = None) -> None:
 
         animator.write_frame('     COMPLETE!      ', '    [==========]    ')
 
-    if duration is None:  # pragma: no cover - infinite loop for manual demo
+    if duration is None:
         while True:
             run_once()
     else:
@@ -93,6 +94,7 @@ def progress(animator: DiffAnimator, duration: Optional[float] = None) -> None:
 
 def loader(animator: DiffAnimator, duration: Optional[float] = None) -> None:
     """Spinner animation updating only the spinner character."""
+    _log_animation_start('loader', duration=duration)
     spinner_chars = ['|', '/', '-', '\\']
     frame_count = int(duration * animator.frame_rate) if duration else None
 
@@ -115,6 +117,7 @@ def loader(animator: DiffAnimator, duration: Optional[float] = None) -> None:
 
 
 def matrix(animator: DiffAnimator, duration: Optional[float] = None) -> None:
+    _log_animation_start('matrix', duration=duration)
     columns = []
     for _ in range(20):
         columns.append({'chars': [], 'next_spawn': random.randint(0, 10)})
@@ -148,6 +151,7 @@ def matrix(animator: DiffAnimator, duration: Optional[float] = None) -> None:
 
 
 def typewriter(animator: DiffAnimator, text: str, line: int = 0) -> None:
+    _log_animation_start('typewriter', text=text, line=line)
     row = 0 if line == 0 else 1
     for i, ch in enumerate(text):
         animator.display.write_positioned(ch, i + 1, row + 1)
@@ -162,6 +166,7 @@ def typewriter(animator: DiffAnimator, text: str, line: int = 0) -> None:
 
 def alert(animator: DiffAnimator, message: str, duration: Optional[float] = None) -> None:
     """Pulse brightness while keeping text static."""
+    _log_animation_start('alert', message=message, duration=duration)
     pulse_count = int(duration * 2) if duration else None
     centered = message.center(20)
     animator.write_frame(centered, centered)
@@ -176,6 +181,7 @@ def alert(animator: DiffAnimator, message: str, duration: Optional[float] = None
 
 def tapestry(animator: DiffAnimator, duration: Optional[float] = None) -> None:
     """Field of spinners rotating in place."""
+    _log_animation_start('tapestry', duration=duration)
     spinner_chars = ['|', '/', '-', '\\']
     frame_count = int(duration * animator.frame_rate) if duration else None
 
@@ -219,6 +225,7 @@ def tapestry(animator: DiffAnimator, duration: Optional[float] = None) -> None:
 
 def clouds(animator: DiffAnimator, duration: Optional[float] = None) -> None:
     """Drifting clouds that occasionally merge as they pass."""
+    _log_animation_start('clouds', duration=duration)
     # Clouds move at independent speeds. When two clouds are adjacent or one
     # space apart they combine into a single wider cloud. Each cloud randomly
     # chooses ``()`` or ``{}`` as its boundary characters and keeps that style
@@ -310,6 +317,13 @@ def zen(
     pause_length: int = 10,
 ) -> None:
     """Calming dot that expands and contracts in a breathing rhythm."""
+    _log_animation_start(
+        'zen',
+        duration=duration,
+        max_radius=max_radius,
+        phase_offset=phase_offset,
+        pause_length=pause_length,
+    )
     frame_count = int(duration * animator.frame_rate) if duration else None
     width = 20
     center = width // 2
@@ -361,6 +375,7 @@ def zen(
 
 def fireworks(animator: DiffAnimator, duration: Optional[float] = None) -> None:
     """Randomized star bursts with expanding rings."""
+    _log_animation_start('fireworks', duration=duration)
     frame_count = int(duration * animator.frame_rate) if duration else None
     bursts: List[Tuple[int, Tuple[int, int]]] = []
 
@@ -406,127 +421,221 @@ def fireworks(animator: DiffAnimator, duration: Optional[float] = None) -> None:
 def stars(
     animator: DiffAnimator,
     duration: Optional[float] = None,
-    quantity: float = 0.3,
-    clustering: float = 0.0,
-    mode: Union[str, StarMode, List[Union[str, StarMode]]] = StarMode.NORMAL,
+    quantity: Union[int, float] = 5,
+    clustering: float = 0.3,
+    full_cycle: float = 0.7,
+    spawn_rate: int = 1,
+    wander: float = 0.0,
 ) -> None:
     """Twinkling starfield with adjustable density.
 
-    ``quantity`` controls the fraction of active cells. ``clustering`` is the
-    inverse of the old ``sparseness`` parameter: ``0`` forces wide spacing while
-    ``1`` allows stars to appear right next to each other. ``mode`` selects one
-    of two behaviors:
+    Defaults are ``quantity=5``, ``clustering=0.3``, ``full_cycle=0.7`` and
+    ``spawn_rate=1``.
 
-    - ``NORMAL`` - random twinkling across both rows
-    - ``CASCADE`` - stars spawn on the top row and fall to the bottom
+    ``quantity`` is the desired number of concurrently visible stars. Values
+    below ``1`` are invalid and will be replaced with ``1``. Values above ``40``
+    are capped at ``40``. Non-integer values are rounded down with a warning.
 
-    When multiple modes are supplied as a comma-separated list, each runs for
-    ``duration / len(modes)`` seconds in sequence. ``duration`` must be provided
-    when using multiple modes.
+    ``clustering`` controls how likely new stars appear next to existing ones.
+    ``0`` prevents adjacent placement entirely while ``1`` always chooses a
+    neighboring position when available.
+
+
+    ``full_cycle`` controls the probability that a newly spawned star will
+    twinkle. ``0`` results in static ``'.'`` characters while ``1`` forces every
+    star to cycle through all phases repeatedly. Values between ``0`` and ``1``
+    mix these behaviors.
+
+    ``spawn_rate`` sets how many new stars may appear in a single frame. The
+    default of ``1`` staggers stars so their phases do not align. Values below
+    ``1`` are replaced with ``1`` and values above ``quantity`` are capped with a
+    warning.
+
+    ``wander`` controls how likely stars relocate when their cycle completes.
+    ``0`` keeps them fixed in place while ``1`` causes a full reshuffle every
+    cycle. Intermediate values blend these behaviors.
+
+    Large quantities combined with low ``clustering`` may not fit on the
+    display. In that case the quantity is capped using an estimated capacity and
+    a warning is logged.
+
+    Stars start at random phases when ``full_cycle`` is non-zero so the field
+    twinkles independently once populated.
     """
 
-    def parse_mode(val: Union[str, StarMode]) -> StarMode:
-        if isinstance(val, StarMode):
-            return val
-        return StarMode(val.lower())
-
-    if isinstance(mode, list):
-        modes = [parse_mode(m) for m in mode]
-    elif isinstance(mode, StarMode):
-        modes = [mode]
-    else:
-        mode_str = str(mode)
-        modes = [parse_mode(m.strip()) for m in mode_str.split(',') if m.strip()]
-
-    if len(modes) > 1 and duration is None:
-        raise ValueError("Duration is required when multiple modes are specified")
-
-    per_duration = None if duration is None else duration / len(modes)
-
-    for single_mode in modes:
-        _run_stars_mode(animator, per_duration, quantity, clustering, single_mode)
-        if duration is None:
-            break
 
 
-def _run_stars_mode(
+    total_cells = 40
+    orig_quantity = quantity
+
+    orig_spawn = spawn_rate
+    orig_wander = wander
+
+    if isinstance(quantity, float) and not quantity.is_integer():
+        if quantity >= 1:
+            logger.warning(
+                "Quantity %s rounded down to %d",
+                orig_quantity,
+                math.floor(quantity),
+            )
+        quantity = math.floor(quantity)
+
+    quantity = int(quantity)
+
+    if quantity < 1:
+        logger.warning(
+            "Quantity %s is below minimum; using 1 instead",
+            orig_quantity,
+        )
+        quantity = 1
+    elif quantity > total_cells:
+        logger.warning(
+            "Quantity %s exceeds display capacity; capping at %d",
+            orig_quantity,
+            total_cells,
+        )
+        quantity = total_cells
+
+    expected_capacity = int(20 + 20 * clustering)
+    if quantity > expected_capacity:
+        logger.warning(
+            "Quantity %s with clustering %.1f may only fit %d stars",
+            orig_quantity,
+            clustering,
+            expected_capacity,
+        )
+        quantity = expected_capacity
+
+    if spawn_rate < 1:
+        logger.warning(
+            "Spawn rate %s is below minimum; using 1 instead",
+            orig_spawn,
+        )
+        spawn_rate = 1
+    elif spawn_rate > quantity:
+        logger.warning(
+            "Spawn rate %s exceeds quantity; capping at %d",
+            orig_spawn,
+            quantity,
+        )
+        spawn_rate = quantity
+
+    if wander < 0.0:
+        logger.warning(
+            "Wander %s is below minimum; using 0.0 instead",
+            orig_wander,
+        )
+        wander = 0.0
+    elif wander > 1.0:
+        logger.warning(
+            "Wander %s exceeds 1.0; capping at 1.0",
+            orig_wander,
+        )
+        wander = 1.0
+
+    _log_animation_start(
+        'stars',
+        duration=duration,
+        quantity=quantity,
+        clustering=clustering,
+        full_cycle=full_cycle,
+        spawn_rate=spawn_rate,
+        wander=wander,
+    )
+
+    _run_stars(
+        animator,
+        duration,
+        quantity,
+        clustering,
+        full_cycle,
+        spawn_rate,
+        wander,
+    )
+
+
+def _run_stars(
     animator: DiffAnimator,
     duration: Optional[float],
-    quantity: float,
+    quantity: int,
     clustering: float,
-    mode: StarMode,
+    full_cycle: float,
+    spawn_rate: int,
+    wander: float,
 ) -> None:
     frame_count = max(1, int(duration * animator.frame_rate)) if duration else None
     active: List[dict] = []
     frame = 0
     animator.write_frame(' ' * 20, ' ' * 20)
 
-    def scaled_quantity(q: float) -> float:
-        """Map ``quantity`` to a more exponential curve.
-
-        This polynomial is fit so that ``quantity`` of 0.1, 0.5, 0.8 and 1.0
-        correspond to roughly 2, 11, 33 and 35 active stars respectively.
-        """
-        q = max(0.0, min(1.0, q))
-        return (
-            -7.648809523809524 * q ** 4
-            + 12.821428571428571 * q ** 3
-            - 5.19672619047619 * q ** 2
-            + 0.8991071428571429 * q
-        )
-
-    max_active = max(1, int(round(40 * scaled_quantity(quantity))))
-    # ``clustering`` is the inverse of the old ``sparseness`` parameter.
-    # ``0`` means maximum spacing and prohibits vertically adjacent stars,
-    # ``1`` favors grouping. The gap decreases as clustering increases.
-    min_gap = round((1 - clustering) * 2)
+    max_active = max(1, min(quantity, 40))
     # limit how many stars spawn in a single frame so phases become staggered
-    max_spawn_per_frame = max(1, max_active)
+    max_spawn_per_frame = max(1, min(spawn_rate, max_active))
+
+    def has_neighbor(x: int, y: int) -> bool:
+        return any(abs(s['x'] - x) + abs(s['y'] - y) == 1 for s in active)
 
     def conflicts(x: int, y: int) -> bool:
-        for s in active:
-            if s['y'] == y and abs(s['x'] - x) <= min_gap:
-                return True
-            if clustering == 0.0 and s['x'] == x and s['y'] != y:
-                return True
+        if any(s['x'] == x and s['y'] == y for s in active):
+            return True
+        if clustering == 0.0 and has_neighbor(x, y):
+            return True
         return False
-
-    def spawn_chance(dist: int) -> float:
-        """Return probability of spawning at a given distance."""
-        if dist <= 2:
-            return 1.0
-        return max(0.1, 1.0 - clustering * (dist - 2) / 3)
 
     while frame_count is None or frame < frame_count:
 
+        removed = 0
         for star in list(active):
-            star['phase'] += 1
-            if mode == StarMode.CASCADE:
-                star['y'] += 1
-            if star['phase'] >= len(STAR_PHASES) or star['y'] >= 2:
+            star['phase'] = (star['phase'] + 1) % len(STAR_PHASES)
+            cycle_reset = star['phase'] == 0
+            if (
+                not star.get('full', True)
+                or (cycle_reset and random.random() < wander)
+            ):
                 active.remove(star)
+                removed += 1
 
-        if mode == StarMode.CASCADE:
-            open_slots = [(x, 0) for x in range(20)]
-        else:
-            open_slots = [(x, y) for y in range(2) for x in range(20)]
+        open_slots = [
+            (x, y)
+            for y in range(2)
+            for x in range(20)
+            if not conflicts(x, y)
+        ]
         random.shuffle(open_slots)
-        spawn_budget = min(max_spawn_per_frame, max_active - len(active))
-        spawned: List[Tuple[int, int]] = []
-        for x, y in open_slots:
-            if spawn_budget <= 0:
-                break
-            if conflicts(x, y):
-                continue
-            if clustering > 0:
-                if active:
-                    dist = min(abs(s['x'] - x) + abs(s['y'] - y) for s in active)
-                    if random.random() > spawn_chance(dist):
-                        continue
-                if clustering < 0.5 and any(abs(px - x) <= 1 and py == y for px, py in spawned):
-                    continue
-            active.append({'x': x, 'y': y, 'phase': random.randint(0, len(STAR_PHASES) - 1)})
-            spawned.append((x, y))
+        if len(active) < max_active:
+            spawn_budget = min(max_spawn_per_frame, max_active - len(active))
+        else:
+            spawn_budget = removed
+        neighbor_slots = [s for s in open_slots if has_neighbor(*s)]
+        empty_slots = [s for s in open_slots if s not in neighbor_slots]
+        for _ in range(spawn_budget):
+            pool: List[Tuple[int, int]]
+            if clustering == 0.0:
+                if not empty_slots:
+                    break
+                pool = empty_slots
+            elif clustering == 1.0 and neighbor_slots:
+                pool = neighbor_slots
+            else:
+                if neighbor_slots and random.random() < clustering:
+                    pool = neighbor_slots
+                elif empty_slots:
+                    pool = empty_slots
+                elif neighbor_slots:
+                    pool = neighbor_slots
+                else:
+                    break
+            x, y = pool.pop()
+            if pool is neighbor_slots and (x, y) in empty_slots:
+                empty_slots.remove((x, y))
+            elif pool is empty_slots and (x, y) in neighbor_slots:
+                neighbor_slots.remove((x, y))
+            prob = max(0.0, min(1.0, full_cycle))
+            full = random.random() < prob
+            phase_start = 0 if len(active) < max_active else (
+                random.randint(0, len(STAR_PHASES) - 1) if full else 0
+            )
+            active.append({'x': x, 'y': y, 'phase': phase_start, 'full': full})
             spawn_budget -= 1
 
         line1 = [' '] * 20
@@ -604,11 +713,21 @@ class ASCIIAnimations:
     def stars(
         self,
         duration: float = 10.0,
-        quantity: float = 0.3,
-        clustering: float = 0.0,
-        mode: Union[str, StarMode, List[Union[str, StarMode]]] = StarMode.NORMAL,
+        quantity: Union[int, float] = 5,
+        clustering: float = 0.3,
+        full_cycle: float = 0.7,
+        spawn_rate: int = 1,
+        wander: float = 0.0,
     ) -> None:
-        stars(self.animator, duration, quantity, clustering, mode)
+        stars(
+            self.animator,
+            duration,
+            quantity,
+            clustering,
+            full_cycle,
+            spawn_rate,
+            wander,
+        )
 
     def get_simulator(self) -> Optional[DisplaySimulator]:
         return self.animator.simulator

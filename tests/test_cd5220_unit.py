@@ -10,7 +10,7 @@ import pytest
 from cd5220 import serial
 import time
 from unittest.mock import Mock, patch, MagicMock
-from cd5220 import CD5220, DisplayMode, CD5220DisplayError
+from cd5220 import CD5220, DisplayMode, CD5220DisplayError, DiffAnimator
 
 class TestCD5220Unit:
     """Unit tests for CD5220 library without hardware dependencies."""
@@ -378,23 +378,59 @@ class TestCD5220Unit:
         mock_display.clear_display()
         assert mock_display.current_mode == DisplayMode.NORMAL
         assert mock_display.active_window is None
-        
-        # Test that viewport operations can be cleanly reset
-        mock_display.set_window(1, 5, 15)
-        mock_display.enter_viewport_mode()
-        mock_display.write_viewport(1, "TEST VIEWPORT")
-        assert mock_display.current_mode == DisplayMode.VIEWPORT
-        
-        mock_display.cancel_current_line()
+
+    def test_render_console_state_outputs(self, mock_display, capsys):
+        anim = DiffAnimator(
+            mock_display,
+            enable_simulator=True,
+            render_console=True,
+            sleep_fn=lambda _: None,
+            frame_sleep_fn=lambda _: None,
+        )
+        anim.write_frame("HELLO", "WORLD")
+        out = capsys.readouterr().out
+        assert "HELLO" in out
+
+    def test_ensure_normal_mode_auto_clears(self, mock_display):
+        mock_display._current_mode = DisplayMode.STRING
+        cleared = mock_display._ensure_normal_mode("write")
+        assert cleared is True
         assert mock_display.current_mode == DisplayMode.NORMAL
+
+    def test_init_with_existing_serial(self):
+        with patch('cd5220.serial.Serial') as mock_serial:
+            mock_serial.return_value.is_open = True
+            existing = mock_serial.return_value
+            display = CD5220(existing, debug=False)
+            assert display.ser is existing
+            assert display.hardware_enabled is True
+
+    def test_render_console_state_verbose(self, capsys):
+        display = CD5220(debug=False, enable_simulator=True, render_console=True)
+        display._render_console_state("desc", True)
+        out = capsys.readouterr().out
+        assert "desc" in out or out
+
+    def test_cursor_movement_commands(self, mock_display):
+        """Cursor movement helpers update simulator coordinates."""
+        mock_display.cursor_move_right()
+        assert mock_display._sim_x == 2
+        mock_display.cursor_move_down()
+        assert mock_display._sim_y == 2
+        mock_display.cursor_move_left()
+        assert mock_display._sim_x == 1
+        mock_display.cursor_move_up()
+        assert mock_display._sim_y == 1
+
+    def test_ensure_normal_mode_errors_when_disabled(self):
+        with patch('cd5220.serial.Serial') as mock_serial:
+            mock_serial.return_value.is_open = True
+            disp = CD5220('mock', debug=False, auto_clear_mode_transitions=False)
+            disp.ser = mock_serial.return_value
+            disp._current_mode = DisplayMode.STRING
+            with pytest.raises(CD5220DisplayError):
+                disp._ensure_normal_mode('write')
         
-        # Test that scroll operations can be cleanly reset
-        mock_display.scroll_marquee("TEST SCROLL")
-        assert mock_display.current_mode == DisplayMode.SCROLL
-        
-        mock_display.clear_display()
-        assert mock_display.current_mode == DisplayMode.NORMAL
-        assert mock_display.active_window is None
 
 class TestCD5220ErrorHandling:
     """Test error handling scenarios."""

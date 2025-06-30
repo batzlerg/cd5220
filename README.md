@@ -150,9 +150,15 @@ python demo.py --port /dev/ttyUSB0 --demo ascii
 python demo_animations.py --animation matrix --port /dev/ttyUSB0
 python demo_animations.py --animation zen --port /dev/ttyUSB0 --debug --max_radius 8
 python demo_animations.py --animation alert --port /dev/ttyUSB0 --message "HELLO"
-# quantity follows an exponential curve where 1.0 approaches a full display
+# stars defaults: quantity 5, clustering 0.3, full_cycle 0.7, spawn_rate 1,
+# wander 0.0
+# quantity controls number of active stars (1-40)
+# spawn_rate controls how quickly stars appear, spawning that many per frame
+# clustering controls the likelihood of spawning adjacent stars
+# wander controls how often stars relocate when a cycle completes
 python demo_animations.py --animation stars --port /dev/ttyUSB0 \
-    --quantity 0.4 --clustering 0.6 --mode cascade
+    --quantity 20 --clustering 0.6 --full_cycle 0.8 \
+    --spawn_rate 5
 
 # simulator console output
 python demo.py --console                # simulator only
