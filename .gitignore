@@ -9,3 +9,4 @@ coverage.xml
 !AGENTS.md
 !STARS_PROPOSAL.md
 .DS_Store
+generated_animations/
