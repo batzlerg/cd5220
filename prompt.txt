@@ -1,0 +1,100 @@
+Create FULL-SCREEN animated function for 20x2 VFD. Both rows MUST show motion!
+
+CRITICAL RULES:
+1. def FUNCNAME(animator: DiffAnimator, duration: float = 10.0)
+2. animator.write_frame(line1_20char, line2_20char) - call every frame
+3. animator.frame_sleep(1.0/animator.frame_rate)
+4. text[:20].ljust(20) for exact 20 chars
+5. frame_count = int(duration * animator.frame_rate)
+6. Use 'frame' variable to create MOTION
+7. Libraries: random, math
+8. BOTH line1 AND line2 must have content/motion - NOT just one row!
+9. Use FULL WIDTH (14+ of 20 columns active)
+
+CHARACTER FAMILIES (use variety!):
+- Rotational: | / - \ < ^ > v
+- Density: . o O @ * # % +
+- Organic: . o O * ~ -
+- Structural: [ ] ( ) { } = _
+
+SPATIAL PATTERNS:
+- CROSS-ROW: Track (x,y) where y in {0,1}, entities move between rows
+- CASCADE: Spawn at row 0, move to row 1, cycle through
+- WAVE: Offset between rows (row2_phase = row1_phase + 3)
+- MIRROR: Symmetric or complementary patterns across rows
+- INDEPENDENT: Different animations per row that coordinate
+
+EXAMPLES:
+
+def cross_row_bounce(animator: DiffAnimator, duration: float = 10.0):
+    ballx, bally = 0, 0
+    velx, vely = 1, 1
+    frame_count = int(duration * animator.frame_rate)
+    for frame in range(frame_count):
+        ballx += velx
+        bally += vely
+        if ballx <= 0 or ballx >= 19:
+            velx = -velx
+        if bally < 0 or bally > 1:
+            vely = -vely
+        bally = max(0, min(1, bally))
+        line1 = [' '] * 20
+        line2 = [' '] * 20
+        if bally == 0:
+            line1[ballx] = 'O'
+        else:
+            line2[ballx] = 'O'
+        animator.write_frame(''.join(line1), ''.join(line2))
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+def cascade_rain(animator: DiffAnimator, duration: float = 10.0):
+    drops = {}
+    frame_count = int(duration * animator.frame_rate)
+    for frame in range(frame_count):
+        if random.random() < 0.3:
+            x = random.randint(0, 19)
+            drops[x] = 0
+        line1 = [' '] * 20
+        line2 = [' '] * 20
+        to_remove = []
+        for x, y in list(drops.items()):
+            if y == 0:
+                line1[x] = '|'
+                drops[x] = 1
+            elif y == 1:
+                line2[x] = '|'
+                to_remove.append(x)
+        for x in to_remove:
+            del drops[x]
+        animator.write_frame(''.join(line1), ''.join(line2))
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+def wave_sync(animator: DiffAnimator, duration: float = 10.0):
+    frame_count = int(duration * animator.frame_rate)
+    for frame in range(frame_count):
+        line1 = [' '] * 20
+        line2 = [' '] * 20
+        for x in range(20):
+            phase1 = (frame + x) % 8
+            phase2 = (frame + x + 3) % 8
+            if phase1 < 2:
+                line1[x] = '.'
+            elif phase1 < 4:
+                line1[x] = 'o'
+            elif phase1 < 6:
+                line1[x] = 'O'
+            else:
+                line1[x] = 'o'
+            if phase2 < 2:
+                line2[x] = '.'
+            elif phase2 < 4:
+                line2[x] = 'o'
+            elif phase2 < 6:
+                line2[x] = 'O'
+            else:
+                line2[x] = 'o'
+        animator.write_frame(''.join(line1), ''.join(line2))
+        animator.frame_sleep(1.0 / animator.frame_rate)
+
+OUTPUT ONLY CODE. NO MARKDOWN.
+
