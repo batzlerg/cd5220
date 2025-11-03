@@ -43,6 +43,8 @@ GENERATION_TIMEOUT = 120
 
 # Suppress cd5220 library's verbose DEBUG logs
 logging.getLogger('CD5220').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
 
 # ============================================================================
 # COLORS
@@ -392,7 +394,7 @@ class DisplayController:
     def start(self):
         """Initialize display"""
         try:
-            self.display = CD5220(VFD_DEVICE, baudrate=VFD_BAUDRATE)
+            self.display = CD5220(VFD_DEVICE, baudrate=VFD_BAUDRATE, debug=False)
             self.animator = DiffAnimator(self.display, frame_rate=FRAME_RATE, render_console=False)
             ok(f"Display connected: {VFD_DEVICE}")
         except Exception as e:

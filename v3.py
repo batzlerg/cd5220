@@ -2,7 +2,7 @@
 """
 VFD Animation Agent - Production AI Art Display
 Research-driven continuous generation with full-screen enforcement
-v3.0.0
+v3.2.0
 """
 
 import sys
@@ -36,9 +36,16 @@ FRAME_RATE = 6
 MAX_RETRIES = 5
 QUEUE_SIZE = 2
 GENERATION_TIMEOUT = 120
+DEFAULT_PROMPT_FILE = 'prompt.txt'
 
-# Suppress library debug logs
+# ============================================================================
+# LOGGING SETUP
+# ============================================================================
+
+# Suppress verbose library logs
 logging.getLogger('CD5220').setLevel(logging.WARNING)
+logging.getLogger('urllib3').setLevel(logging.WARNING)
+logging.getLogger('requests').setLevel(logging.WARNING)
 
 # ============================================================================
 # COLORS
@@ -64,113 +71,28 @@ def debug(msg: str):
         print(f"{C.DEBUG}[DEBUG]{C.RESET} {msg}", file=sys.stderr, flush=True)
 
 def header(msg: str):
-    print(f"\n{C.BOLD}{'='*50}{C.RESET}", file=sys.stderr, flush=True)
+    print(f"\n{C.BOLD}{'='*40}{C.RESET}", file=sys.stderr, flush=True)
     print(f"{C.BOLD}{msg}{C.RESET}", file=sys.stderr, flush=True)
-    print(f"{C.BOLD}{'='*50}{C.RESET}", file=sys.stderr, flush=True)
+    print(f"{C.BOLD}{'='*40}{C.RESET}", file=sys.stderr, flush=True)
 
 # ============================================================================
-# ENHANCED SYSTEM PROMPT
+# PROMPT LOADING
 # ============================================================================
 
-PROMPT = """Create FULL-SCREEN animated function for 20x2 VFD. Both rows MUST show motion!
-
-CRITICAL RULES:
-1. def FUNCNAME(animator: DiffAnimator, duration: float = 10.0)
-2. animator.write_frame(line1_20char, line2_20char) - call every frame
-3. animator.frame_sleep(1.0/animator.frame_rate)
-4. text[:20].ljust(20) for exact 20 chars
-5. frame_count = int(duration * animator.frame_rate)
-6. Use 'frame' variable to create MOTION
-7. Libraries: random, math
-8. BOTH line1 AND line2 must have content/motion - NOT just one row!
-9. Use FULL WIDTH (14+ of 20 columns active)
-
-CHARACTER FAMILIES (use variety!):
-- Rotational: | / - \\ < ^ > v
-- Density: . o O @ * # % +
-- Organic: . o O * ~ -
-- Structural: [ ] ( ) { } = _
-
-SPATIAL PATTERNS:
-- CROSS-ROW: Track (x,y) where y in {0,1}, entities move between rows
-- CASCADE: Spawn at row 0, move to row 1, cycle through
-- WAVE: Offset between rows (row2_phase = row1_phase + 3)
-- MIRROR: Symmetric or complementary patterns across rows
-- INDEPENDENT: Different animations per row that coordinate
-
-EXAMPLES:
-
-def cross_row_bounce(animator: DiffAnimator, duration: float = 10.0):
-    ballx, bally = 0, 0
-    velx, vely = 1, 1
-    frame_count = int(duration * animator.frame_rate)
-    for frame in range(frame_count):
-        ballx += velx
-        bally += vely
-        if ballx <= 0 or ballx >= 19:
-            velx = -velx
-        if bally < 0 or bally > 1:
-            vely = -vely
-        bally = max(0, min(1, bally))
-        line1 = [' '] * 20
-        line2 = [' '] * 20
-        if bally == 0:
-            line1[ballx] = 'O'
-        else:
-            line2[ballx] = 'O'
-        animator.write_frame(''.join(line1), ''.join(line2))
-        animator.frame_sleep(1.0 / animator.frame_rate)
-
-def cascade_rain(animator: DiffAnimator, duration: float = 10.0):
-    drops = {}
-    frame_count = int(duration * animator.frame_rate)
-    for frame in range(frame_count):
-        if random.random() < 0.3:
-            x = random.randint(0, 19)
-            drops[x] = 0
-        line1 = [' '] * 20
-        line2 = [' '] * 20
-        to_remove = []
-        for x, y in list(drops.items()):
-            if y == 0:
-                line1[x] = '|'
-                drops[x] = 1
-            elif y == 1:
-                line2[x] = '|'
-                to_remove.append(x)
-        for x in to_remove:
-            del drops[x]
-        animator.write_frame(''.join(line1), ''.join(line2))
-        animator.frame_sleep(1.0 / animator.frame_rate)
-
-def wave_sync(animator: DiffAnimator, duration: float = 10.0):
-    frame_count = int(duration * animator.frame_rate)
-    for frame in range(frame_count):
-        line1 = [' '] * 20
-        line2 = [' '] * 20
-        for x in range(20):
-            phase1 = (frame + x) % 8
-            phase2 = (frame + x + 3) % 8
-            if phase1 < 2:
-                line1[x] = '.'
-            elif phase1 < 4:
-                line1[x] = 'o'
-            elif phase1 < 6:
-                line1[x] = 'O'
-            else:
-                line1[x] = 'o'
-            if phase2 < 2:
-                line2[x] = '.'
-            elif phase2 < 4:
-                line2[x] = 'o'
-            elif phase2 < 6:
-                line2[x] = 'O'
-            else:
-                line2[x] = 'o'
-        animator.write_frame(''.join(line1), ''.join(line2))
-        animator.frame_sleep(1.0 / animator.frame_rate)
-
-OUTPUT ONLY CODE. NO MARKDOWN."""
+def load_prompt(prompt_file: Path) -> str:
+    """Load prompt template from file"""
+    try:
+        with open(prompt_file, 'r') as f:
+            prompt = f.read()
+        ok(f"Loaded prompt: {prompt_file}")
+        return prompt
+    except FileNotFoundError:
+        err(f"Prompt file not found: {prompt_file}")
+        err(f"Create a {prompt_file} file with your prompt template")
+        sys.exit(1)
+    except Exception as e:
+        err(f"Error loading prompt: {e}")
+        sys.exit(1)
 
 # ============================================================================
 # STATE & STATS
@@ -246,21 +168,18 @@ def generate_idea() -> str:
 def validate_dual_row_usage(code: str) -> Tuple[bool, str]:
     """Check if animation uses both rows"""
     
-    # Must have both line1 and line2 assignments
     has_line1 = 'line1' in code
     has_line2 = 'line2' in code
     
     if not (has_line1 and has_line2):
         return False, "Missing line1 or line2 variable"
     
-    # Check for list initialization pattern
     line1_init = re.search(r'line1\s*=\s*\[', code)
     line2_init = re.search(r'line2\s*=\s*\[', code)
     
     if line1_init and line2_init:
         return True, ""
     
-    # Alternative: string building
     line1_str = re.search(r'line1\s*=\s*["\']', code)
     line2_str = re.search(r'line2\s*=\s*["\']', code)
     
@@ -272,7 +191,6 @@ def validate_dual_row_usage(code: str) -> Tuple[bool, str]:
 def validate_width_usage(code: str) -> Tuple[bool, str]:
     """Check if animation uses reasonable width"""
     
-    # Look for range(20) or similar patterns
     full_width_patterns = [
         r'range\(\s*20\s*\)',
         r'for\s+\w+\s+in\s+range\(20\)',
@@ -283,7 +201,6 @@ def validate_width_usage(code: str) -> Tuple[bool, str]:
         if re.search(pattern, code):
             return True, ""
     
-    # Check for coordinate tracking
     if 'ballx' in code or 'x' in code:
         return True, ""
     
@@ -293,14 +210,8 @@ def validate_motion(code: str) -> Tuple[bool, str]:
     """Check if animation has motion logic"""
     
     motion_indicators = [
-        'frame',
-        'velocity',
-        'vel',
-        'position',
-        'pos',
-        'movement',
-        'move',
-        'offset'
+        'frame', 'velocity', 'vel', 'position', 'pos',
+        'movement', 'move', 'offset'
     ]
     
     for indicator in motion_indicators:
@@ -312,7 +223,6 @@ def validate_motion(code: str) -> Tuple[bool, str]:
 def validate_character_variety(code: str) -> Tuple[bool, str]:
     """Check for character family usage"""
     
-    # Count unique non-space display characters in string literals
     chars = set()
     for match in re.finditer(r'["\']([^"\']+)["\']', code):
         content = match.group(1)
@@ -328,15 +238,13 @@ def validate_character_variety(code: str) -> Tuple[bool, str]:
 # ============================================================================
 
 def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
-    """Clean LLM output and validate structure - NO BACKTICKS IN STRINGS"""
+    """Clean LLM output and validate structure"""
     
     code = raw_code
-    # Remove markdown fences WITHOUT using backticks in the code
     code = code.replace('python', '')
-    code = code.replace(chr(96)*3, '')  # Use chr(96) for backtick character
+    code = code.replace(chr(96)*3, '')
     code = code.strip()
     
-    # Find function definition
     lines = code.split('\n')
     func_start = -1
     
@@ -356,7 +264,6 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     
     func_code = '\n'.join(lines[func_start:])
     
-    # Basic API validation
     if 'write_frame' not in func_code:
         return None, "Missing write_frame call"
     if 'frame_sleep' not in func_code:
@@ -364,7 +271,6 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     if len(func_code) < 150:
         return None, f"Code too short ({len(func_code)} chars)"
     
-    # Quality validations
     valid, error = validate_dual_row_usage(func_code)
     if not valid:
         return None, f"Row usage: {error}"
@@ -385,7 +291,7 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     
     return full_code, ""
 
-def generate_code(desc: str, func_name: str, attempt: int, prev_errors: List[str]) -> Tuple[Optional[str], str]:
+def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_errors: List[str]) -> Tuple[Optional[str], str]:
     """Generate code via Ollama with retry context"""
     
     debug(f"Generate attempt {attempt}/{MAX_RETRIES}: {desc}")
@@ -396,7 +302,7 @@ def generate_code(desc: str, func_name: str, attempt: int, prev_errors: List[str
         retry_context = f"\n\nPREVIOUS ATTEMPTS FAILED:\n{error_summary}\n\nFIX: Ensure BOTH rows active, FULL width, MOTION with frame variable, 4+ unique chars."
     
     user_prompt = f"Create: {desc}\nFunction name: {func_name}{retry_context}\n\nOutput ONLY function code."
-    full_prompt = f"{PROMPT}\n\n{user_prompt}"
+    full_prompt = f"{prompt}\n\n{user_prompt}"
     
     payload = {
         'model': MODEL,
@@ -470,10 +376,11 @@ class Animation:
 class Generator:
     """Background generation thread with quality enforcement"""
     
-    def __init__(self, animation_queue: queue.Queue, state: State, output_dir: Path):
+    def __init__(self, animation_queue: queue.Queue, state: State, output_dir: Path, prompt: str):
         self.queue = animation_queue
         self.state = state
         self.output_dir = output_dir
+        self.prompt = prompt
         self.running = False
         self.thread = None
         self.gen_count = 0
@@ -513,26 +420,23 @@ class Generator:
         all_errors = []
         
         for attempt in range(1, MAX_RETRIES + 1):
-            code, gen_error = generate_code(desc, func_name, attempt, all_errors)
+            code, gen_error = generate_code(self.prompt, desc, func_name, attempt, all_errors)
             
             if not code:
                 all_errors.append(f"Gen{attempt}: {gen_error}")
                 continue
             
-            # Save code
             try:
                 code_file.write_text(code)
             except Exception as e:
                 all_errors.append(f"Save{attempt}: {e}")
                 continue
             
-            # Syntax check
             valid, syntax_error = validate_syntax(code)
             if not valid:
                 all_errors.append(f"Syntax{attempt}: {syntax_error}")
                 continue
             
-            # Compile to callable
             try:
                 namespace = {
                     'DiffAnimator': DiffAnimator,
@@ -549,17 +453,16 @@ class Generator:
                 
                 self.queue.put(animation)
                 self.state.save(func_name, desc, 'success')
-                ok(f"✓ Generated: {desc}")
+                debug(f"✓ Queued: {desc}")
                 return
                 
             except Exception as e:
                 all_errors.append(f"Compile{attempt}: {str(e)[:100]}")
                 continue
         
-        # All attempts failed
         final_error = " | ".join(all_errors[-3:])
         self.state.save(func_name, desc, 'failure', final_error)
-        warn(f"✗ Failed after {MAX_RETRIES} attempts: {desc}")
+        debug(f"✗ Failed: {desc}")
 
 # ============================================================================
 # DISPLAY CONTROLLER
@@ -579,10 +482,15 @@ class DisplayController:
     def start(self):
         """Initialize display hardware"""
         try:
-            self.display = CD5220(VFD_DEVICE, baudrate=VFD_BAUDRATE)
-            self.animator = DiffAnimator(self.display, frame_rate=FRAME_RATE, render_console=False)
+            # IMPROVED: Add debug=False to suppress hardware logging
+            self.display = CD5220(VFD_DEVICE, baudrate=VFD_BAUDRATE, debug=False)
+            self.animator = DiffAnimator(
+                self.display,
+                frame_rate=FRAME_RATE,
+                render_console=False
+            )
             self.animator.clear_display()
-            ok(f"Display ready: {VFD_DEVICE} @ {FRAME_RATE}fps")
+            ok(f"Display connected: {VFD_DEVICE}")
         except Exception as e:
             err(f"Display init failed: {e}")
             raise
@@ -600,10 +508,10 @@ class DisplayController:
                     self._show_placeholder()
                     continue
                 
-                # Play animation
                 self.play_count += 1
                 queue_depth = self.queue.qsize()
-                info(f"▶ #{self.play_count}: {animation.desc[:40]} | Q:{queue_depth} | {self.state.stats()}")
+                # IMPROVED: Cleaner log format without truncation
+                info(f"▶ #{self.play_count}: {animation.desc} | Queue: {queue_depth} | {self.state.stats()}")
                 
                 try:
                     animation.run(self.animator, ANIMATION_DURATION)
@@ -617,7 +525,7 @@ class DisplayController:
                 self.running = False
                 break
             except Exception as e:
-                err(f"Display loop error: {e}")
+                err(f"Display error: {e}")
                 time.sleep(1)
     
     def _show_placeholder(self):
@@ -628,12 +536,8 @@ class DisplayController:
                     break
                 
                 dots = "." * (i % 4)
-                spinner = ['|', '/', '-', '\\'][i % 4]
-                
-                line1 = f"  GENERATING{dots}".ljust(20)
-                line2 = f"   Please wait {spinner}   ".ljust(20)
-                
-                self.animator.write_frame(line1, line2)
+                line1 = f"GENERATING{dots}".ljust(20)
+                self.animator.write_frame(line1, " " * 20)
                 time.sleep(0.5)
             
             self.animator.clear_display()
@@ -654,32 +558,27 @@ class DisplayController:
 
 def init_check():
     """Verify environment and dependencies"""
-    header("System Check")
+    header("Initialization")
     
-    # Check Python modules
     try:
         from cd5220 import CD5220, DiffAnimator
-        ok("cd5220 module imported")
+        ok("cd5220 module OK")
     except ImportError as e:
         err(f"cd5220 import failed: {e}")
-        err("Fix: Ensure you're in the CD5220 directory")
         sys.exit(1)
     
-    # Check device
     device_path = Path(VFD_DEVICE)
     if not device_path.exists():
         err(f"Device not found: {VFD_DEVICE}")
-        err("Fix: Check USB connection and device path")
         sys.exit(1)
     
     if not (os.access(device_path, os.R_OK) and os.access(device_path, os.W_OK)):
-        err(f"Permission denied: {VFD_DEVICE}")
+        err(f"No permission: {VFD_DEVICE}")
         err("Fix: sudo usermod -a -G dialout $USER && logout")
         sys.exit(1)
     
-    ok(f"Device accessible: {VFD_DEVICE}")
+    ok(f"Device OK: {VFD_DEVICE}")
     
-    # Check Ollama
     try:
         resp = requests.get(f"{OLLAMA_API_BASE}/api/tags", timeout=5)
         resp.raise_for_status()
@@ -698,10 +597,10 @@ def init_check():
         err("Fix: Ensure Ollama is running (ollama serve)")
         sys.exit(1)
     except Exception as e:
-        err(f"Ollama check failed: {e}")
+        err(f"Ollama error: {e}")
         sys.exit(1)
     
-    info(f"Config: {ANIMATION_DURATION}s animations @ {FRAME_RATE}fps")
+    info(f"Config: {ANIMATION_DURATION}s animations, queue size {QUEUE_SIZE}")
 
 # ============================================================================
 # MAIN
@@ -711,29 +610,35 @@ def main():
     global VERBOSE, ANIMATION_DURATION
     
     parser = argparse.ArgumentParser(
-        description='VFD Animation Agent v3.0 - Full-Screen AI Art Display',
+        description='VFD Animation Agent v3.2 - Full-Screen AI Art Display',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Production animation generator with quality enforcement.
 Generates full-screen dual-row animations continuously.
 
 Examples:
-  %(prog)s                    # Run with defaults
-  %(prog)s -v                 # Verbose debug mode
-  %(prog)s -d 15              # 15s animations
-  %(prog)s --fps 8            # 8 FPS playback
+  %(prog)s                      # Run with defaults (continuous mode)
+  %(prog)s -v                   # Verbose debug mode
+  %(prog)s -d 15                # 15s animations
+  %(prog)s --fps 8              # 8 FPS playback
+  %(prog)s -p custom.txt        # Use custom prompt file
 
 Environment:
   VFD_DEVICE          Serial device (default: /dev/ttyUSB0)
   OLLAMA_API_BASE     Ollama endpoint (default: http://localhost:11434)
   OLLAMA_MODEL        Model name (default: qwen2.5:3b)
   ANIMATION_DURATION  Animation length (default: 10.0)
+
+Continuous Mode:
+  Agent runs indefinitely, generating and displaying animations.
+  Press Ctrl+C to stop gracefully.
         """
     )
     parser.add_argument('-d', '--duration', type=float, metavar='SEC', help='Animation duration')
     parser.add_argument('-f', '--fps', type=int, metavar='FPS', help='Frame rate')
+    parser.add_argument('-p', '--prompt', type=str, metavar='FILE', default=DEFAULT_PROMPT_FILE, help=f'Prompt template file (default: {DEFAULT_PROMPT_FILE})')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose debug output')
-    parser.add_argument('--version', action='version', version='VFD Agent v3.0')
+    parser.add_argument('--version', action='version', version='VFD Agent v3.2')
     
     args = parser.parse_args()
     
@@ -744,7 +649,9 @@ Environment:
     if args.fps:
         FRAME_RATE = args.fps
     
-    # Setup directories
+    prompt_file = Path(args.prompt)
+    prompt = load_prompt(prompt_file)
+    
     script_dir = Path(__file__).parent
     output_dir = script_dir / 'generated_animations'
     output_dir.mkdir(exist_ok=True)
@@ -752,24 +659,20 @@ Environment:
     state = State(output_dir / 'agent_state.json')
     animation_queue = queue.Queue(maxsize=QUEUE_SIZE)
     
-    # Initialize
     init_check()
     
-    # Start components
     header("Starting Continuous Display")
-    info("Full-screen dual-row animations enforced")
-    info("Quality validation: row usage, width, motion, character variety")
+    info("Display will NEVER be blank")
+    info("Animations generate in background")
     info("Press Ctrl+C to stop")
     
-    generator = Generator(animation_queue, state, output_dir)
+    generator = Generator(animation_queue, state, output_dir, prompt)
     display = DisplayController(animation_queue, state)
     
     try:
-        # Pre-generate
         info("Pre-generating initial animations...")
         generator.start()
         
-        # Wait for queue
         wait_start = time.time()
         while animation_queue.qsize() < QUEUE_SIZE:
             if time.time() - wait_start > 60:
@@ -777,14 +680,13 @@ Environment:
                 wait_start = time.time()
             time.sleep(0.5)
         
-        ok(f"Queue ready ({animation_queue.qsize()} animations)")
+        ok(f"Queue filled ({animation_queue.qsize()} ready)")
         
-        # Start display
         display.start()
         display.run()
         
     except KeyboardInterrupt:
-        info("\nShutting down gracefully...")
+        info("\nStopping gracefully...")
     except Exception as e:
         err(f"Fatal error: {e}")
         import traceback
@@ -792,7 +694,7 @@ Environment:
     finally:
         generator.stop()
         display.stop()
-        info("Agent stopped")
+        info("Stopped")
 
 if __name__ == '__main__':
     main()
