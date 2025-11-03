@@ -168,7 +168,7 @@ class CD5220:
         self.base_command_delay = base_command_delay
         self.mode_transition_delay = mode_transition_delay
         self.initialization_delay = initialization_delay
-        self.render_console = render_console
+        self._render_console_enabled = render_console
         self.console_verbose = console_verbose
         self.simulator: Optional[DisplaySimulator] = DisplaySimulator() if enable_simulator or render_console else None
         self._first_console_render = True
@@ -258,7 +258,7 @@ class CD5220:
                 before = self.simulator.get_display()
                 self._parse_and_apply_command(command)
                 after = self.simulator.get_display()
-                if self.render_console:
+                if self._render_console_enabled:
                     changed = before != after
                     self._render_console_state(description, changed)
 
@@ -1060,7 +1060,7 @@ class DiffAnimator:
         self.frame_sleep_fn = frame_sleep_fn
         self.buffer: List[List[str]] = [list(" " * 20), list(" " * 20)]
         self.state: List[List[str]] = [list(" " * 20), list(" " * 20)]
-        self.render_console = render_console
+        self._render_console_enabled = render_console
         enable_simulator = enable_simulator or render_console
         self.simulator: Optional[DisplaySimulator] = DisplaySimulator() if enable_simulator else None
         self._first_console_render = True
@@ -1096,7 +1096,7 @@ class DiffAnimator:
                     if self.simulator:
                         # DisplaySimulator expects 1-based positions
                         self.simulator.set_char(x + 1, y + 1, ch)
-        if self.render_console:
+        if self._render_console_enabled:
             self._render_console()
 
     def write_frame(self, line1: str, line2: str) -> None:
@@ -1113,7 +1113,7 @@ class DiffAnimator:
         self.reset_tracking()
         if self.simulator:
             self.simulator.clear()
-        if self.render_console:
+        if self._render_console_enabled:
             self._first_console_render = True
 
     def get_simulator(self) -> Optional[DisplaySimulator]:
@@ -1131,7 +1131,12 @@ class DiffAnimator:
         if not self.simulator:
             self.simulator = DisplaySimulator()
             self.reset_tracking()
-        self.render_console = True
+        self._render_console_enabled = True
+
+    @property
+    def render_console(self) -> bool:
+        """Return True if console rendering is enabled."""
+        return self._render_console_enabled
 
     def _render_console(self) -> None:
         """Render the simulator state to the terminal in-place."""
