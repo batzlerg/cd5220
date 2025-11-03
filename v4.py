@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 VFD Animation Agent - Production AI Art Display
-v4.3.0 - Final production version with correct loading sequence
+v4.11.0 - Improved UX for single-shot mode
 """
 
 import sys
@@ -21,10 +21,6 @@ import requests
 
 from cd5220 import CD5220, DiffAnimator
 
-# ============================================================================
-# CONFIGURATION
-# ============================================================================
-
 VFD_DEVICE = os.getenv('VFD_DEVICE', '/dev/ttyUSB0')
 VFD_BAUDRATE = 9600
 OLLAMA_API_BASE = os.getenv('OLLAMA_API_BASE', 'http://localhost:11434')
@@ -36,18 +32,11 @@ QUEUE_SIZE = 2
 GENERATION_TIMEOUT = 120
 DEFAULT_PROMPT_FILE = 'prompt.txt'
 PREVIEW_MODE = False
-
-# ============================================================================
-# LOGGING SETUP
-# ============================================================================
+CUSTOM_IDEA = None
 
 logging.getLogger('CD5220').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('requests').setLevel(logging.WARNING)
-
-# ============================================================================
-# COLORS
-# ============================================================================
 
 class C:
     INFO = '\033[0;36m'
@@ -74,10 +63,6 @@ def header(msg: str):
     print(f"{C.BOLD}{msg}{C.RESET}", file=sys.stderr, flush=True)
     print(f"{C.BOLD}{'='*40}{C.RESET}", file=sys.stderr, flush=True)
 
-# ============================================================================
-# PROMPT LOADING
-# ============================================================================
-
 def load_prompt(prompt_file: Path) -> str:
     try:
         with open(prompt_file, 'r') as f:
@@ -90,10 +75,6 @@ def load_prompt(prompt_file: Path) -> str:
     except Exception as e:
         err(f"Error loading prompt: {e}")
         sys.exit(1)
-
-# ============================================================================
-# STATE & STATS
-# ============================================================================
 
 class State:
     def __init__(self, state_file: Path):
@@ -134,10 +115,6 @@ class State:
             f = self.data.get('failure', 0)
             return f"✓{s} ✗{f}"
 
-# ============================================================================
-# PROGRESS TRACKER
-# ============================================================================
-
 class ProgressTracker:
     def __init__(self, target: int):
         self.target = target
@@ -152,22 +129,14 @@ class ProgressTracker:
         with self.lock:
             return (self.current, self.target)
 
-# ============================================================================
-# DUAL-MODE ANIMATOR (Hardware + Console Preview)
-# ============================================================================
-
 class DualAnimator:
-    """Writes to hardware AND shows console preview"""
-
     def __init__(self, hardware_animator: DiffAnimator, preview_enabled: bool):
         self.hardware = hardware_animator
         self.preview_enabled = preview_enabled
         self.frame_rate = hardware_animator.frame_rate
 
     def write_frame(self, line1: str, line2: str):
-        """Write to hardware and show preview"""
         self.hardware.write_frame(line1, line2)
-
         if self.preview_enabled:
             print(f"\r{'-'*20}", file=sys.stderr, end='', flush=True)
             print(f"\n{line1}", file=sys.stderr, flush=True)
@@ -175,18 +144,15 @@ class DualAnimator:
             print(f"{'-'*20}", file=sys.stderr, flush=True)
 
     def frame_sleep(self, seconds: float):
-        """Sleep for frame timing"""
         self.hardware.frame_sleep(seconds)
 
     def clear_display(self):
-        """Clear hardware display"""
         self.hardware.clear_display()
 
-# ============================================================================
-# IDEA GENERATOR
-# ============================================================================
-
 def generate_idea() -> str:
+    if CUSTOM_IDEA:
+        return CUSTOM_IDEA
+    
     patterns = ['cascade', 'wave', 'bounce', 'drift', 'pulse', 'spin', 'sweep',
                 'flow', 'ripple', 'orbit', 'scatter', 'converge', 'spiral']
     elements = ['rain', 'stars', 'dots', 'particles', 'waves', 'lines', 'symbols',
@@ -194,10 +160,6 @@ def generate_idea() -> str:
     modifiers = ['dual row', 'synchronized', 'mirrored', 'offset', 'alternating',
                  'crossing', 'rising', 'falling', 'expanding', 'contracting']
     return f"{random.choice(modifiers)} {random.choice(patterns)} {random.choice(elements)}"
-
-# ============================================================================
-# VALIDATION FUNCTIONS
-# ============================================================================
 
 def validate_dual_row_usage(code: str) -> Tuple[bool, str]:
     has_line1 = 'line1' in code
@@ -229,10 +191,6 @@ def validate_character_variety(code: str) -> Tuple[bool, str]:
     if len(chars) >= 4:
         return True, ""
     return False, f"Only {len(chars)} chars (need 4+)"
-
-# ============================================================================
-# CODE GENERATION
-# ============================================================================
 
 def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     code = raw_code.replace('python', '').replace(chr(96)*3, '').strip()
@@ -278,16 +236,19 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     full_code = f"from cd5220 import DiffAnimator\nimport random\nimport math\n\n{func_code}\n"
     return full_code, ""
 
-def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_errors: List[str]) -> Tuple[Optional[str], str]:
+def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_errors: List[str], output_dir: Path, progress: Optional[ProgressTracker] = None) -> Tuple[Optional[str], str, str]:
     debug(f"Generate attempt {attempt}/{MAX_RETRIES}: {desc}")
 
     retry_context = ""
     if attempt > 1:
         error_summary = "\n".join(f"- {err}" for err in prev_errors[-3:])
-        retry_context = f"\n\nPREVIOUS FAILED:\n{error_summary}\n\nFIX: BOTH rows, FULL width, MOTION, 4+ chars."
+        retry_context = f"\n\nPREVIOUS FAILED:\n{error_summary}\n\nFIX: BOTH rows, FULL width, MOTION, 4+ chars. Bounds check array indices [0-19]."
 
     user_prompt = f"Create: {desc}\nFunction: {func_name}{retry_context}\n\nOutput ONLY code."
     full_prompt = f"{prompt}\n\n{user_prompt}"
+
+    if progress:
+        progress.set_progress(attempt - 1)
 
     payload = {
         'model': MODEL,
@@ -295,8 +256,8 @@ def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_err
         'stream': False,
         'options': {
             'temperature': max(0.4, 0.8 - (attempt * 0.08)),
-            'num_predict': 800,
-            'stop': ['\n\ndef ', '\nif __name__']
+            'num_predict': 2048,
+            'stop': ['\nif __name__']
         }
     }
 
@@ -305,12 +266,27 @@ def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_err
         resp.raise_for_status()
         raw_code = resp.json().get('response', '')
         if not raw_code:
-            return None, "Empty response"
-        return clean_code(raw_code, func_name)
+            return None, "Empty response", ""
+        
+        code, error = clean_code(raw_code, func_name)
+        
+        if not code:
+            failed_file = output_dir / f"failed_{func_name}_attempt{attempt}.txt"
+            try:
+                failed_file.write_text(f"Description: {desc}\nAttempt: {attempt}\nError: {error}\n\n{'='*60}\nRAW RESPONSE:\n{'='*60}\n\n{raw_code}")
+                debug(f"  │  Full response saved to: {failed_file.relative_to(Path.cwd())}")
+            except Exception as e:
+                debug(f"  │  Could not save failed response: {e}")
+            
+            preview = raw_code[:200].replace('\n', ' ')
+            debug(f"  │  Raw response preview: {preview}...")
+        
+        return code, error, raw_code
+        
     except requests.exceptions.Timeout:
-        return None, f"Timeout"
+        return None, f"Timeout", ""
     except Exception as e:
-        return None, f"Error: {str(e)[:100]}"
+        return None, f"Error: {str(e)[:100]}", ""
 
 def validate_syntax(code: str) -> Tuple[bool, str]:
     try:
@@ -319,9 +295,24 @@ def validate_syntax(code: str) -> Tuple[bool, str]:
     except SyntaxError as e:
         return False, f"Line {e.lineno}: {e.msg}"
 
-# ============================================================================
-# ANIMATION PACKAGE
-# ============================================================================
+def validate_runtime(func: Callable, func_name: str) -> Tuple[bool, str]:
+    try:
+        start_time = time.time()
+        test_display = CD5220.create_simulator_only(debug=False, render_console=False)
+        test_animator = DiffAnimator(
+            test_display,
+            frame_rate=600,
+            frame_sleep_fn=lambda seconds: None,
+            render_console=False
+        )
+        func(test_animator, duration=1.0)
+        elapsed = time.time() - start_time
+        debug(f"  ├─ ✓ Runtime validation passed (600 frames in {elapsed:.2f}s)")
+        return True, ""
+    except IndexError as e:
+        return False, f"IndexError: {str(e)[:100]}"
+    except Exception as e:
+        return False, f"Runtime: {str(e)[:100]}"
 
 class Animation:
     def __init__(self, func_name: str, desc: str, code: str, callable_func: Callable):
@@ -337,10 +328,6 @@ class Animation:
         except Exception as e:
             debug(f"Animation error: {e}")
             raise
-
-# ============================================================================
-# BACKGROUND GENERATOR
-# ============================================================================
 
 class Generator:
     def __init__(self, animation_queue: queue.Queue, state: State, output_dir: Path, prompt: str, progress: Optional[ProgressTracker] = None):
@@ -392,28 +379,45 @@ class Generator:
             if self.progress:
                 self.progress.set_progress(animation_start + (attempt - 1) * progress_per_attempt)
 
-            code, gen_error = generate_code(self.prompt, desc, func_name, attempt, all_errors)
+            code, gen_error, raw_response = generate_code(self.prompt, desc, func_name, attempt, all_errors, self.output_dir)
             if not code:
+                debug(f"  ├─ ✗ Code generation failed: {gen_error}")
                 all_errors.append(f"Gen{attempt}: {gen_error}")
                 continue
 
+            debug(f"  ├─ ✓ Code received ({len(code)} chars)")
+
             try:
                 code_file.write_text(code)
+                debug(f"  ├─ ✓ Saved to {code_file.name}")
             except Exception as e:
+                debug(f"  ├─ ✗ Save failed: {e}")
                 all_errors.append(f"Save: {e}")
                 continue
 
             valid, syntax_error = validate_syntax(code)
             if not valid:
+                debug(f"  ├─ ✗ Syntax validation failed: {syntax_error}")
                 all_errors.append(f"Syntax: {syntax_error}")
                 continue
+            
+            debug(f"  ├─ ✓ Syntax valid")
 
             try:
                 namespace = {'DiffAnimator': DiffAnimator, 'random': random, 'math': __import__('math')}
                 exec(code, namespace)
 
                 if func_name not in namespace:
+                    debug(f"  ├─ ✗ Function not found in namespace")
                     all_errors.append("Function missing")
+                    continue
+
+                debug(f"  ├─ ✓ Compiled successfully")
+
+                valid_runtime, runtime_error = validate_runtime(namespace[func_name], func_name)
+                if not valid_runtime:
+                    debug(f"  ├─ ✗ Runtime validation failed: {runtime_error}")
+                    all_errors.append(f"Runtime: {runtime_error}")
                     continue
 
                 animation = Animation(func_name, desc, code, namespace[func_name])
@@ -423,20 +427,86 @@ class Generator:
                 if self.progress:
                     self.progress.set_progress(self.gen_count * 1.0)
 
-                debug(f"✓ Queued: {desc}")
+                debug(f"  └─ ✓ Queued successfully")
                 return
             except Exception as e:
+                debug(f"  ├─ ✗ Compilation failed: {str(e)[:100]}")
                 all_errors.append(f"Compile: {str(e)[:100]}")
                 continue
 
+        debug(f"  └─ ✗ All {MAX_RETRIES} attempts failed")
         final_error = " | ".join(all_errors[-3:])
         self.state.save(func_name, desc, 'failure', final_error)
         if self.progress:
             self.progress.set_progress(self.gen_count * 1.0)
 
-# ============================================================================
-# DISPLAY CONTROLLER
-# ============================================================================
+    def _generate_one_single_shot(self):
+        desc = generate_idea()
+        func_name = f"anim_{int(time.time())}_{random.randint(1000,9999)}"
+        code_file = self.output_dir / f"{func_name}.py"
+        all_errors = []
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            code, gen_error, raw_response = generate_code(self.prompt, desc, func_name, attempt, all_errors, self.output_dir, self.progress)
+            if not code:
+                debug(f"  ├─ ✗ Code generation failed: {gen_error}")
+                all_errors.append(f"Gen{attempt}: {gen_error}")
+                continue
+
+            debug(f"  ├─ ✓ Code received ({len(code)} chars)")
+
+            try:
+                code_file.write_text(code)
+                debug(f"  ├─ ✓ Saved to {code_file.name}")
+            except Exception as e:
+                debug(f"  ├─ ✗ Save failed: {e}")
+                all_errors.append(f"Save: {e}")
+                continue
+
+            valid, syntax_error = validate_syntax(code)
+            if not valid:
+                debug(f"  ├─ ✗ Syntax validation failed: {syntax_error}")
+                all_errors.append(f"Syntax: {syntax_error}")
+                continue
+            
+            debug(f"  ├─ ✓ Syntax valid")
+
+            try:
+                namespace = {'DiffAnimator': DiffAnimator, 'random': random, 'math': __import__('math')}
+                exec(code, namespace)
+
+                if func_name not in namespace:
+                    debug(f"  ├─ ✗ Function not found in namespace")
+                    all_errors.append("Function missing")
+                    continue
+
+                debug(f"  ├─ ✓ Compiled successfully")
+
+                valid_runtime, runtime_error = validate_runtime(namespace[func_name], func_name)
+                if not valid_runtime:
+                    debug(f"  ├─ ✗ Runtime validation failed: {runtime_error}")
+                    all_errors.append(f"Runtime: {runtime_error}")
+                    continue
+
+                animation = Animation(func_name, desc, code, namespace[func_name])
+                self.queue.put(animation)
+                self.state.save(func_name, desc, 'success')
+
+                if self.progress:
+                    self.progress.set_progress(MAX_RETRIES)
+
+                debug(f"  └─ ✓ Queued successfully")
+                return
+            except Exception as e:
+                debug(f"  ├─ ✗ Compilation failed: {str(e)[:100]}")
+                all_errors.append(f"Compile: {str(e)[:100]}")
+                continue
+
+        debug(f"  └─ ✗ All {MAX_RETRIES} attempts failed")
+        final_error = " | ".join(all_errors[-3:])
+        self.state.save(func_name, desc, 'failure', final_error)
+        if self.progress:
+            self.progress.set_progress(MAX_RETRIES)
 
 class DisplayController:
     def __init__(self, animation_queue: queue.Queue, state: State):
@@ -462,7 +532,6 @@ class DisplayController:
             raise
 
     def show_loading(self, progress_tracker: ProgressTracker):
-        """Show centered loading progress bar with controlled exit"""
         try:
             self.loading_active = True
             last_percent = -1
@@ -526,6 +595,27 @@ class DisplayController:
                 err(f"Display error: {e}")
                 time.sleep(1)
 
+    def run_single(self, animation: Animation):
+        self.running = True
+        info(f"▶ Looping: {animation.desc}")
+        
+        loop_count = 0
+        while self.running:
+            try:
+                loop_count += 1
+                if loop_count % 10 == 0:
+                    info(f"▶ Loop #{loop_count}: {animation.desc}")
+                
+                animation.run(self.animator, ANIMATION_DURATION)
+                self.animator.clear_display()
+                time.sleep(0.2)
+            except KeyboardInterrupt:
+                self.running = False
+                break
+            except Exception as e:
+                err(f"Playback error: {e}")
+                time.sleep(1)
+
     def _show_placeholder(self):
         try:
             for i in range(60):
@@ -545,10 +635,6 @@ class DisplayController:
                 self.animator.clear_display()
             except:
                 pass
-
-# ============================================================================
-# INITIALIZATION
-# ============================================================================
 
 def init_check():
     header("Initialization")
@@ -584,27 +670,29 @@ def init_check():
         err(f"Ollama error: {e}")
         sys.exit(1)
 
-    info(f"Config: {ANIMATION_DURATION}s animations, queue size {QUEUE_SIZE}")
-
-# ============================================================================
-# MAIN
-# ============================================================================
+    if CUSTOM_IDEA:
+        info(f"Custom idea: {CUSTOM_IDEA} (single-shot mode)")
+        info(f"Config: {ANIMATION_DURATION}s animation duration")
+    else:
+        info(f"Config: {ANIMATION_DURATION}s animations, queue size {QUEUE_SIZE}")
 
 def main():
-    global VERBOSE, ANIMATION_DURATION, PREVIEW_MODE, FRAME_RATE
+    global VERBOSE, ANIMATION_DURATION, PREVIEW_MODE, FRAME_RATE, CUSTOM_IDEA
 
-    parser = argparse.ArgumentParser(description='VFD Animation Agent v4.3')
+    parser = argparse.ArgumentParser(description='VFD Animation Agent v4.11')
     parser.add_argument('-d', '--duration', type=float, help='Animation duration')
     parser.add_argument('-f', '--fps', type=int, help='Frame rate')
     parser.add_argument('-p', '--prompt', type=str, default=DEFAULT_PROMPT_FILE, help='Prompt file')
+    parser.add_argument('--idea', type=str, help='Custom animation idea (generates once, loops forever)')
     parser.add_argument('--preview', action='store_true', help='Show console simulation')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose output')
-    parser.add_argument('--version', action='version', version='VFD Agent v4.3')
+    parser.add_argument('--version', action='version', version='VFD Agent v4.11')
 
     args = parser.parse_args()
 
     VERBOSE = args.verbose
     PREVIEW_MODE = args.preview
+    CUSTOM_IDEA = args.idea
     if args.duration:
         ANIMATION_DURATION = args.duration
     if args.fps:
@@ -620,58 +708,106 @@ def main():
 
     init_check()
 
-    header("Starting Continuous Display")
-    info("Display will NEVER be blank")
-    info("Animations generate in background")
-    if PREVIEW_MODE:
-        info("Preview mode: Console simulation enabled")
-    info("Press Ctrl+C to stop")
-
-    progress = ProgressTracker(QUEUE_SIZE)
-    generator = Generator(animation_queue, state, output_dir, prompt, progress)
-    display = DisplayController(animation_queue, state)
-
-    try:
-        display.start()
+    if CUSTOM_IDEA:
+        header("Single-Shot Mode")
+        info("Generating ONE animation, will loop forever")
+        if PREVIEW_MODE:
+            info("Preview mode: Console simulation enabled")
+        info("Press Ctrl+C to stop")
         
-        info("Pre-generating initial animations...")
+        progress = ProgressTracker(MAX_RETRIES)
+        generator = Generator(animation_queue, state, output_dir, prompt, progress)
+        display = DisplayController(animation_queue, state)
         
-        loading_thread = threading.Thread(
-            target=display.show_loading,
-            args=(progress,),
-            daemon=True
-        )
-        loading_thread.start()
-        
-        generator.start()
-
-        wait_start = time.time()
-        while animation_queue.qsize() < 1:
-            if time.time() - wait_start > 120:
-                warn("Initial generation taking longer than expected...")
-                wait_start = time.time()
-            time.sleep(0.1)
-
-        display.loading_active = False
-        loading_thread.join(timeout=0.5)
-        
-        ok(f"Queue filled ({animation_queue.qsize()} ready)")
-
-        display.run()
-        
-    except KeyboardInterrupt:
-        info("\nStopping gracefully...")
-    except Exception as e:
-        err(f"Fatal error: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
         try:
-            generator.stop()
+            display.start()
+            
+            info("Generating animation...")
+            loading_thread = threading.Thread(
+                target=display.show_loading,
+                args=(progress,),
+                daemon=True
+            )
+            loading_thread.start()
+            
+            generator._generate_one_single_shot()
+            
+            display.loading_active = False
+            loading_thread.join(timeout=0.5)
+            
+            if animation_queue.qsize() < 1:
+                err("Generation failed after max retries")
+                err(f"Check generated_animations/failed_*.txt for details")
+                sys.exit(1)
+            
+            animation = animation_queue.get()
+            ok(f"Generated: {animation.desc}")
+            
+            display.run_single(animation)
+            
+        except KeyboardInterrupt:
+            info("\nStopping...")
+        except Exception as e:
+            err(f"Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
             display.stop()
             info("Stopped")
+    
+    else:
+        header("Continuous Generation Mode")
+        info("Display will NEVER be blank")
+        info("Animations generate in background")
+        if PREVIEW_MODE:
+            info("Preview mode: Console simulation enabled")
+        info("Press Ctrl+C to stop")
+
+        progress = ProgressTracker(QUEUE_SIZE)
+        generator = Generator(animation_queue, state, output_dir, prompt, progress)
+        display = DisplayController(animation_queue, state)
+
+        try:
+            display.start()
+            
+            info("Pre-generating initial animations...")
+            
+            loading_thread = threading.Thread(
+                target=display.show_loading,
+                args=(progress,),
+                daemon=True
+            )
+            loading_thread.start()
+            
+            generator.start()
+
+            wait_start = time.time()
+            while animation_queue.qsize() < 1:
+                if time.time() - wait_start > 120:
+                    warn("Initial generation taking longer than expected...")
+                    wait_start = time.time()
+                time.sleep(0.1)
+
+            display.loading_active = False
+            loading_thread.join(timeout=0.5)
+            
+            ok(f"Queue filled ({animation_queue.qsize()} ready)")
+
+            display.run()
+            
         except KeyboardInterrupt:
-            sys.exit(0)
+            info("\nStopping gracefully...")
+        except Exception as e:
+            err(f"Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            try:
+                generator.stop()
+                display.stop()
+                info("Stopped")
+            except KeyboardInterrupt:
+                sys.exit(0)
 
 if __name__ == '__main__':
     main()
