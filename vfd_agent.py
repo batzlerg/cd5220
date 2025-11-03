@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-VFD Animation Agent - Production v1.0 FINAL
-Autonomous AI art generator for CD5220 VFD display
-Zero regressions, all fixes applied
+VFD Animation Agent - Continuous AI Art Display
+Zero-downtime generative art with background generation pipeline
+v2.0.5
 """
 
 import sys
@@ -11,12 +11,14 @@ import json
 import random
 import time
 import argparse
+import threading
+import queue
+import logging
 from pathlib import Path
-from typing import Optional, Dict, Tuple
+from typing import Optional, Dict, Tuple, Callable
 from datetime import datetime
 import requests
 
-# Add cd5220 to path
 sys.path.insert(0, str(Path.home() / 'cd5220'))
 from cd5220 import CD5220, DiffAnimator
 
@@ -28,11 +30,19 @@ VFD_DEVICE = os.getenv('VFD_DEVICE', '/dev/ttyUSB0')
 VFD_BAUDRATE = 9600
 OLLAMA_API_BASE = os.getenv('OLLAMA_API_BASE', 'http://localhost:11434')
 MODEL = os.getenv('OLLAMA_MODEL', 'qwen2.5:3b')
-MIN_INTERVAL = int(os.getenv('MIN_INTERVAL', '15'))  # Minimum wait between animations
-MAX_GENERATION_TIME = int(os.getenv('MAX_GENERATION_TIME', '120'))  # 2min timeout
 ANIMATION_DURATION = float(os.getenv('ANIMATION_DURATION', '10.0'))
+BUFFER_TIME = float(os.getenv('BUFFER_TIME', '5.0'))
 FRAME_RATE = 6
 MAX_RETRIES = 3
+QUEUE_SIZE = 2
+GENERATION_TIMEOUT = 120
+
+# ============================================================================
+# LOGGING SETUP
+# ============================================================================
+
+# Suppress cd5220 library's verbose DEBUG logs
+logging.getLogger('CD5220').setLevel(logging.WARNING)
 
 # ============================================================================
 # COLORS
@@ -49,38 +59,37 @@ class C:
 
 VERBOSE = False
 
-def info(msg: str): print(f"{C.INFO}ℹ{C.RESET} {msg}", file=sys.stderr)
-def ok(msg: str): print(f"{C.OK}✓{C.RESET} {msg}", file=sys.stderr)
-def err(msg: str): print(f"{C.ERR}✗{C.RESET} {msg}", file=sys.stderr)
-def warn(msg: str): print(f"{C.WARN}⚠{C.RESET} {msg}", file=sys.stderr)
+def info(msg: str): print(f"{C.INFO}ℹ{C.RESET} {msg}", file=sys.stderr, flush=True)
+def ok(msg: str): print(f"{C.OK}✓{C.RESET} {msg}", file=sys.stderr, flush=True)
+def err(msg: str): print(f"{C.ERR}✗{C.RESET} {msg}", file=sys.stderr, flush=True)
+def warn(msg: str): print(f"{C.WARN}⚠{C.RESET} {msg}", file=sys.stderr, flush=True)
 def debug(msg: str):
     if VERBOSE:
-        print(f"{C.DEBUG}[DEBUG]{C.RESET} {msg}", file=sys.stderr)
+        print(f"{C.DEBUG}[DEBUG]{C.RESET} {msg}", file=sys.stderr, flush=True)
 
 def header(msg: str):
-    print(f"\n{C.BOLD}{'='*40}{C.RESET}", file=sys.stderr)
-    print(f"{C.BOLD}{msg}{C.RESET}", file=sys.stderr)
-    print(f"{C.BOLD}{'='*40}{C.RESET}", file=sys.stderr)
+    print(f"\n{C.BOLD}{'='*40}{C.RESET}", file=sys.stderr, flush=True)
+    print(f"{C.BOLD}{msg}{C.RESET}", file=sys.stderr, flush=True)
+    print(f"{C.BOLD}{'='*40}{C.RESET}", file=sys.stderr, flush=True)
 
 # ============================================================================
 # SYSTEM PROMPT
 # ============================================================================
 
-PROMPT = """Create an ANIMATED function for a 20x2 char VFD display. MOTION is key!
+PROMPT = """Create ANIMATED function for 20x2 VFD. MOTION required!
 
 RULES:
 1. def FUNCNAME(animator: DiffAnimator, duration: float = 10.0)
-2. Every frame: animator.write_frame(line1_20char, line2_20char)
-3. Every frame: animator.frame_sleep(1.0/animator.frame_rate)
-4. Pad to 20: text[:20].ljust(20)
+2. animator.write_frame(line1_20char, line2_20char)
+3. animator.frame_sleep(1.0/animator.frame_rate)
+4. text[:20].ljust(20)
 5. frame_count = int(duration * animator.frame_rate)
-6. Use 'frame' variable for MOTION (scrolling, bouncing, fading, etc)
-7. Common imports available: random, math
-8. Output ONLY Python code - NO markdown
+6. Use 'frame' for MOTION
+7. random, math available
+8. Output ONLY code - NO markdown
 
-EXAMPLES WITH MOTION:
+EXAMPLES:
 
-# Scrolling text
 def scroll_text(animator: DiffAnimator, duration: float = 10.0):
     text = "HELLO WORLD  "
     frame_count = int(duration * animator.frame_rate)
@@ -90,7 +99,6 @@ def scroll_text(animator: DiffAnimator, duration: float = 10.0):
         animator.write_frame(line1, " " * 20)
         animator.frame_sleep(1.0 / animator.frame_rate)
 
-# Bouncing ball
 def bounce_ball(animator: DiffAnimator, duration: float = 10.0):
     frame_count = int(duration * animator.frame_rate)
     for frame in range(frame_count):
@@ -99,29 +107,17 @@ def bounce_ball(animator: DiffAnimator, duration: float = 10.0):
         animator.write_frame(line1, " " * 20)
         animator.frame_sleep(1.0 / animator.frame_rate)
 
-# Pulsing stars
-def pulse_stars(animator: DiffAnimator, duration: float = 10.0):
-    frame_count = int(duration * animator.frame_rate)
-    for frame in range(frame_count):
-        intensity = int(3 + 2 * math.sin(frame * 0.2))
-        chars = [".", "*", "x", "X", "#"]
-        char = chars[min(intensity, len(chars)-1)]
-        line1 = (char + " ") * 10
-        animator.write_frame(line1[:20].ljust(20), " " * 20)
-        animator.frame_sleep(1.0 / animator.frame_rate)
-
-OUTPUT ONLY THE FUNCTION CODE."""
+OUTPUT ONLY CODE."""
 
 # ============================================================================
-# STATE MANAGEMENT
+# STATE & STATS
 # ============================================================================
 
 class State:
-    """Persistent state tracker"""
-    
     def __init__(self, state_file: Path):
         self.file = state_file
         self.data = self._load()
+        self.lock = threading.Lock()
     
     def _load(self) -> Dict:
         if self.file.exists():
@@ -133,64 +129,51 @@ class State:
         return {'generations': [], 'success': 0, 'failure': 0}
     
     def save(self, func: str, desc: str, status: str, error: str = ""):
-        self.data['generations'].append({
-            'timestamp': int(time.time()),
-            'function': func,
-            'description': desc,
-            'status': status,
-            'error': error[:200] if error else ""
-        })
-        self.data[status] = self.data.get(status, 0) + 1
-        self.data['generations'] = self.data['generations'][-50:]
-        
-        try:
-            with open(self.file, 'w') as f:
-                json.dump(self.data, f, indent=2)
-        except Exception as e:
-            warn(f"Failed to save state: {e}")
+        with self.lock:
+            self.data['generations'].append({
+                'timestamp': int(time.time()),
+                'function': func,
+                'description': desc,
+                'status': status,
+                'error': error[:200] if error else ""
+            })
+            self.data[status] = self.data.get(status, 0) + 1
+            self.data['generations'] = self.data['generations'][-50:]
+            
+            try:
+                with open(self.file, 'w') as f:
+                    json.dump(self.data, f, indent=2)
+            except Exception as e:
+                debug(f"State save failed: {e}")
     
     def stats(self) -> str:
-        s = self.data.get('success', 0)
-        f = self.data.get('failure', 0)
-        return f"✓{s} ✗{f}"
-    
-    def last_errors(self, n: int = 3) -> str:
-        errors = [g for g in self.data['generations'][-10:] if g.get('error')]
-        if not errors:
-            return ""
-        recent = errors[-n:]
-        return "\n".join([f"- {e['error']}" for e in recent])
+        with self.lock:
+            s = self.data.get('success', 0)
+            f = self.data.get('failure', 0)
+            return f"✓{s} ✗{f}"
 
 # ============================================================================
 # IDEA GENERATOR
 # ============================================================================
 
 def generate_idea() -> str:
-    """Generate random animation concept"""
     patterns = ['scroll', 'pulse', 'bounce', 'fade', 'wave', 'blink', 'sweep', 'spin']
     elements = ['text', 'dots', 'stars', 'lines', 'bars', 'arrow', 'box', 'waves']
     styles = ['simple', 'smooth', 'fast', 'slow', 'random', 'steady']
     return f"{random.choice(patterns)} {random.choice(elements)} {random.choice(styles)}"
 
 # ============================================================================
-# CODE CLEANER
+# CODE GENERATION
 # ============================================================================
 
 def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
-    """Aggressively clean LLM output"""
+    """Clean LLM output"""
     
-    debug(f"Raw code length: {len(raw_code)} chars")
-    debug(f"First 100 chars: {repr(raw_code[:100])}")
-    
-    # Remove ALL markdown
     code = raw_code
     code = code.replace('`'*3 + 'python', '')
     code = code.replace('`'*3, '')
     code = code.strip()
     
-    debug(f"After markdown removal: {len(code)} chars")
-    
-    # Find function definition
     lines = code.split('\n')
     func_start = -1
     
@@ -202,57 +185,34 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     if func_start == -1:
         for i, line in enumerate(lines):
             if line.strip().startswith('def ') and 'animator' in line.lower():
-                warn(f"Found function but name mismatch at line {i}")
                 func_start = i
                 break
     
     if func_start == -1:
-        return None, f"No function definition found. First 200 chars: {code[:200]}"
+        return None, "No function definition found"
     
-    # Extract function
-    func_lines = lines[func_start:]
-    func_code = '\n'.join(func_lines)
-    
-    debug(f"Extracted function: {len(func_code)} chars, {len(func_lines)} lines")
-    
-    # Build complete module
+    func_code = '\n'.join(lines[func_start:])
     full_code = f"from cd5220 import DiffAnimator\n\n{func_code}\n"
     
-    # Sanity checks
     if 'write_frame' not in full_code:
-        return None, "Missing animator.write_frame() call"
+        return None, "Missing write_frame"
     if 'frame_sleep' not in full_code:
-        return None, "Missing animator.frame_sleep() call"
+        return None, "Missing frame_sleep"
     if len(full_code) < 100:
         return None, f"Code too short ({len(full_code)} chars)"
     
     return full_code, ""
 
-# ============================================================================
-# CODE GENERATOR
-# ============================================================================
-
 def generate_code(desc: str, func_name: str, attempt: int, prev_errors: str) -> Tuple[Optional[str], str]:
-    """Generate animation code via Ollama API"""
+    """Generate code via Ollama"""
     
-    debug(f"Attempt {attempt}: generating '{desc}' as {func_name}")
-    info(f"Creating: {desc}")
+    debug(f"Generate attempt {attempt}: {desc}")
     
-    # Build context-aware prompt
     retry_context = ""
     if attempt > 1:
-        retry_context = f"""
-PREVIOUS ATTEMPT FAILED:
-{prev_errors}
-
-FIX: Output ONLY raw Python code. NO markdown. NO explanations."""
+        retry_context = f"\nPREVIOUS FAILED:\n{prev_errors}\n\nFIX: Output ONLY code."
     
-    user_prompt = f"""Create animation: {desc}
-Function name: {func_name}
-{retry_context}
-
-Output ONLY the Python function code starting with 'def {func_name}'."""
-    
+    user_prompt = f"Create: {desc}\nName: {func_name}{retry_context}\n\nOutput ONLY function code."
     full_prompt = f"{PROMPT}\n\n{user_prompt}"
     
     payload = {
@@ -267,11 +227,10 @@ Output ONLY the Python function code starting with 'def {func_name}'."""
     }
     
     try:
-        debug("Calling Ollama API...")
         resp = requests.post(
             f"{OLLAMA_API_BASE}/api/generate",
             json=payload,
-            timeout=MAX_GENERATION_TIME
+            timeout=GENERATION_TIMEOUT
         )
         resp.raise_for_status()
         
@@ -279,197 +238,227 @@ Output ONLY the Python function code starting with 'def {func_name}'."""
         raw_code = data.get('response', '')
         
         if not raw_code:
-            return None, "Empty API response"
-        
-        debug(f"API returned {len(raw_code)} chars")
+            return None, "Empty response"
         
         return clean_code(raw_code, func_name)
         
     except Exception as e:
         return None, f"API error: {str(e)[:100]}"
 
-# ============================================================================
-# VALIDATOR
-# ============================================================================
-
 def validate_syntax(code: str) -> Tuple[bool, str]:
-    """Validate Python syntax"""
+    """Validate syntax"""
     try:
         compile(code, '<string>', 'exec')
         return True, ""
     except SyntaxError as e:
-        error_msg = f"Line {e.lineno}: {e.msg}"
-        if e.text:
-            error_msg += f" -> {e.text.strip()}"
-        return False, error_msg
+        return False, f"Line {e.lineno}: {e.msg}"
 
 # ============================================================================
-# EXECUTOR
+# ANIMATION PACKAGE
 # ============================================================================
 
-def execute_animation(code: str, func_name: str) -> Tuple[bool, str]:
-    """Execute animation on hardware"""
-    try:
-        import random
-        import math
-        namespace = {
-            'DiffAnimator': DiffAnimator,
-            'random': random,
-            'math': math
-        }
-        
-        # Load code
-        exec(code, namespace)
-        
-        if func_name not in namespace:
-            return False, f"Function {func_name} not in namespace"
-        
-        # Connect to display
-        debug(f"Connecting to {VFD_DEVICE}...")
-        display = CD5220(VFD_DEVICE, baudrate=VFD_BAUDRATE)
-        animator = DiffAnimator(display, frame_rate=FRAME_RATE, render_console=False)
-        
-        # Run animation
-        info(f"▶ Running {func_name} for {ANIMATION_DURATION}s...")
-        try:
-            namespace[func_name](animator, duration=ANIMATION_DURATION)
-            animator.clear_display()
-            return True, ""
-        except KeyboardInterrupt:
-            warn("Interrupted by user")
-            animator.clear_display()
-            return False, "User interrupted"
-        except Exception as e:
-            animator.clear_display()
-            return False, f"{type(e).__name__}: {str(e)}"
+class Animation:
+    """Self-contained animation package"""
+    def __init__(self, func_name: str, desc: str, code: str, callable_func: Callable):
+        self.func_name = func_name
+        self.desc = desc
+        self.code = code
+        self.callable = callable_func
+        self.created_at = time.time()
     
-    except Exception as e:
-        return False, f"Exec error: {type(e).__name__}: {str(e)}"
+    def run(self, animator: DiffAnimator, duration: float):
+        """Execute animation"""
+        self.callable(animator, duration=duration)
 
 # ============================================================================
-# MAIN GENERATION LOOP
+# BACKGROUND GENERATOR
 # ============================================================================
 
-def generate_and_run(output_dir: Path, state: State, gen_num: int, user_desc: Optional[str] = None) -> bool:
-    """Generate and execute one animation"""
-    header(f"Generation #{gen_num}")
+class Generator:
+    """Background generation thread"""
     
-    desc = user_desc if user_desc else generate_idea()
-    func_name = f"anim_{int(time.time())}"
-    code_file = output_dir / f"{func_name}.py"
+    def __init__(self, animation_queue: queue.Queue, state: State, output_dir: Path):
+        self.queue = animation_queue
+        self.state = state
+        self.output_dir = output_dir
+        self.running = False
+        self.thread = None
+        self.gen_count = 0
     
-    info(f"Concept: {desc}")
+    def start(self):
+        """Start background thread"""
+        self.running = True
+        self.thread = threading.Thread(target=self._generate_loop, daemon=True)
+        self.thread.start()
+        debug("Generator thread started")
     
-    all_errors = []
+    def stop(self):
+        """Stop background thread"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=5)
+        info("Generator thread stopped")
     
-    for attempt in range(1, MAX_RETRIES + 1):
-        if attempt > 1:
-            warn(f"Retry {attempt}/{MAX_RETRIES}")
-        
-        prev_errors = "\n".join(all_errors[-2:]) if all_errors else ""
-        
-        # Generate
-        code, gen_error = generate_code(desc, func_name, attempt, prev_errors)
-        
-        if not code:
-            err(f"Generation failed: {gen_error}")
-            all_errors.append(f"Gen: {gen_error}")
-            continue
-        
-        # Save
-        try:
-            code_file.write_text(code)
-            ok(f"Saved: {code_file.name}")
-        except Exception as e:
-            err(f"Save failed: {e}")
-            all_errors.append(f"Save: {e}")
-            continue
-        
-        # Preview
-        info("Preview:")
-        lines = code.split('\n')
-        for i, line in enumerate(lines[:10], 1):
-            print(f"  {i:2d}| {line}", file=sys.stderr)
-        if len(lines) > 10:
-            print(f"  ...({len(lines)-10} more lines)", file=sys.stderr)
-        
-        # Validate
-        valid, syntax_error = validate_syntax(code)
-        if not valid:
-            err(f"Syntax error: {syntax_error}")
-            all_errors.append(f"Syntax: {syntax_error}")
-            continue
-        
-        ok("Syntax OK")
-        
-        # Execute
-        success, exec_error = execute_animation(code, func_name)
-        if success:
-            ok("✓ Animation completed successfully!")
-            state.save(func_name, desc, 'success')
-            return True
-        else:
-            err(f"Execution failed: {exec_error}")
-            all_errors.append(f"Exec: {exec_error}")
-    
-    # All retries failed
-    final_error = " | ".join(all_errors[-3:])
-    err(f"Failed after {MAX_RETRIES} attempts")
-    state.save(func_name, desc, 'failure', final_error)
-    return False
-
-# ============================================================================
-# MODES
-# ============================================================================
-
-def continuous_mode(output_dir: Path, state: State):
-    """Continuous generation with smart timing"""
-    header("Continuous Mode - Autonomous AI Art")
-    info(f"Device:{VFD_DEVICE} | Model:{MODEL}")
-    info(f"Min interval:{MIN_INTERVAL}s | Animation:{ANIMATION_DURATION}s")
-    info("Press Ctrl+C to stop")
-    
-    gen_num = 0
-    while True:
-        gen_num += 1
-        
-        # Track generation time
-        gen_start = time.time()
-        generate_and_run(output_dir, state, gen_num)
-        gen_elapsed = time.time() - gen_start
-        
-        info(f"Stats: {state.stats()}")
-        
-        if VERBOSE:
-            recent_errors = state.last_errors()
-            if recent_errors:
-                debug("Recent error patterns:")
-                for line in recent_errors.split('\n'):
-                    debug(f"  {line}")
-        
-        # Smart wait: min 15s, but generation already took time
-        wait_time = max(0, MIN_INTERVAL - gen_elapsed)
-        
-        if wait_time > 0:
-            info(f"Next in {wait_time:.1f}s...")
+    def _generate_loop(self):
+        """Main generation loop"""
+        while self.running:
             try:
-                time.sleep(wait_time)
-            except KeyboardInterrupt:
-                info("\nStopped by user")
-                break
-        else:
-            info("Starting next generation immediately...")
+                if self.queue.qsize() < QUEUE_SIZE:
+                    self._generate_one()
+                else:
+                    time.sleep(1)
+            except Exception as e:
+                debug(f"Generator error: {e}")
+                time.sleep(5)
+    
+    def _generate_one(self):
+        """Generate single animation"""
+        self.gen_count += 1
+        
+        desc = generate_idea()
+        func_name = f"anim_{int(time.time())}_{random.randint(1000,9999)}"
+        code_file = self.output_dir / f"{func_name}.py"
+        
+        debug(f"Gen #{self.gen_count}: {desc}")
+        
+        all_errors = []
+        
+        for attempt in range(1, MAX_RETRIES + 1):
+            prev_errors = "\n".join(all_errors[-2:]) if all_errors else ""
+            
+            code, gen_error = generate_code(desc, func_name, attempt, prev_errors)
+            
+            if not code:
+                all_errors.append(f"Gen: {gen_error}")
+                continue
+            
+            try:
+                code_file.write_text(code)
+            except Exception as e:
+                all_errors.append(f"Save: {e}")
+                continue
+            
+            valid, syntax_error = validate_syntax(code)
+            if not valid:
+                all_errors.append(f"Syntax: {syntax_error}")
+                continue
+            
+            # Compile to callable
+            try:
+                import random as rand_mod
+                import math
+                namespace = {
+                    'DiffAnimator': DiffAnimator,
+                    'random': rand_mod,
+                    'math': math
+                }
+                exec(code, namespace)
+                
+                if func_name not in namespace:
+                    all_errors.append("Function not in namespace")
+                    continue
+                
+                animation = Animation(func_name, desc, code, namespace[func_name])
+                
+                self.queue.put(animation)
+                self.state.save(func_name, desc, 'success')
+                debug(f"✓ Queued: {desc}")
+                return
+                
+            except Exception as e:
+                all_errors.append(f"Compile: {str(e)}")
+                continue
+        
+        # All attempts failed
+        final_error = " | ".join(all_errors[-3:])
+        self.state.save(func_name, desc, 'failure', final_error)
+        debug(f"✗ Failed: {desc}")
 
-def single_mode(output_dir: Path, state: State, desc: Optional[str] = None):
-    """Single generation mode"""
-    generate_and_run(output_dir, state, 1, user_desc=desc)
+# ============================================================================
+# DISPLAY CONTROLLER
+# ============================================================================
+
+class DisplayController:
+    """Main display thread"""
+    
+    def __init__(self, animation_queue: queue.Queue, state: State):
+        self.queue = animation_queue
+        self.state = state
+        self.display = None
+        self.animator = None
+        self.running = False
+        self.play_count = 0
+    
+    def start(self):
+        """Initialize display"""
+        try:
+            self.display = CD5220(VFD_DEVICE, baudrate=VFD_BAUDRATE)
+            self.animator = DiffAnimator(self.display, frame_rate=FRAME_RATE, render_console=False)
+            ok(f"Display connected: {VFD_DEVICE}")
+        except Exception as e:
+            err(f"Display init failed: {e}")
+            raise
+    
+    def run(self):
+        """Main display loop"""
+        self.running = True
+        
+        while self.running:
+            try:
+                # Get next animation (block with timeout)
+                try:
+                    animation = self.queue.get(timeout=15)
+                except queue.Empty:
+                    self._show_placeholder()
+                    continue
+                
+                # Play animation
+                self.play_count += 1
+                queue_depth = self.queue.qsize()
+                info(f"▶ #{self.play_count}: {animation.desc} | Queue: {queue_depth} | {self.state.stats()}")
+                
+                try:
+                    animation.run(self.animator, ANIMATION_DURATION)
+                    self.animator.clear_display()
+                except Exception as e:
+                    err(f"Playback error: {e}")
+                    self.animator.clear_display()
+                
+            except KeyboardInterrupt:
+                self.running = False
+                break
+            except Exception as e:
+                err(f"Display error: {e}")
+                time.sleep(1)
+    
+    def _show_placeholder(self):
+        """Show 'generating' placeholder"""
+        warn("Queue empty - showing placeholder")
+        
+        try:
+            for i in range(30):
+                if not self.queue.empty():
+                    break
+                dots = "." * ((i % 4))
+                line1 = f"GENERATING{dots}".ljust(20)
+                self.animator.write_frame(line1, " " * 20)
+                time.sleep(0.5)
+            self.animator.clear_display()
+        except:
+            pass
+    
+    def stop(self):
+        """Cleanup"""
+        self.running = False
+        if self.animator:
+            self.animator.clear_display()
 
 # ============================================================================
 # INITIALIZATION
 # ============================================================================
 
 def init_check():
-    """Verify environment and dependencies"""
+    """Verify environment"""
     header("Initialization")
     
     # Check Python modules
@@ -478,14 +467,12 @@ def init_check():
         ok("cd5220 module OK")
     except ImportError as e:
         err(f"cd5220 import failed: {e}")
-        err("Run: pip3 install -r ~/cd5220/requirements.txt")
         sys.exit(1)
     
     # Check device
     device_path = Path(VFD_DEVICE)
     if not device_path.exists():
         err(f"Device not found: {VFD_DEVICE}")
-        err("Check USB connection and run detect_ftdi_vfd.sh")
         sys.exit(1)
     
     if not (os.access(device_path, os.R_OK) and os.access(device_path, os.W_OK)):
@@ -505,75 +492,100 @@ def init_check():
         
         if MODEL not in model_names:
             err(f"Model not found: {MODEL}")
-            err(f"Available: {', '.join(model_names[:5])}")
             err(f"Fix: ollama pull {MODEL}")
             sys.exit(1)
         
-        ok(f"Ready: {MODEL}")
+        ok(f"Model ready: {MODEL}")
     except Exception as e:
         err(f"Ollama error: {e}")
-        err(f"Ensure Ollama is running at {OLLAMA_API_BASE}")
         sys.exit(1)
     
-    info(f"Config: {MIN_INTERVAL}s min interval, {ANIMATION_DURATION}s duration, {MAX_RETRIES} retries")
+    info(f"Config: {ANIMATION_DURATION}s animations, {BUFFER_TIME}s buffer, queue size {QUEUE_SIZE}")
 
 # ============================================================================
 # MAIN
 # ============================================================================
 
 def main():
-    global VERBOSE, MIN_INTERVAL, ANIMATION_DURATION, MAX_RETRIES
+    global VERBOSE, ANIMATION_DURATION, BUFFER_TIME
     
     parser = argparse.ArgumentParser(
-        description='VFD Animation Agent - Autonomous AI Art Generator',
+        description='VFD Animation Agent - Continuous AI Art Display',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Examples:
-  %(prog)s                              # Run continuous mode
-  %(prog)s -v -i 60                     # Verbose, 60s min interval
-  %(prog)s -s "bouncing ball"           # Single generation
-  OLLAMA_MODEL=gemma2:2b %(prog)s       # Use different model
+Zero-downtime generative art with background generation pipeline.
+Animations generate in background while current animation plays.
 
-Environment Variables:
+Examples:
+  %(prog)s                    # Run with defaults
+  %(prog)s -v                 # Verbose mode
+  %(prog)s -d 15              # 15s animations
+  %(prog)s --buffer 3         # Start generating 3s before end
+
+Environment:
   VFD_DEVICE          Serial device (default: /dev/ttyUSB0)
   OLLAMA_API_BASE     Ollama endpoint (default: http://localhost:11434)
   OLLAMA_MODEL        Model name (default: qwen2.5:3b)
-  MIN_INTERVAL        Min seconds between generations (default: 15)
-  ANIMATION_DURATION  Animation length in seconds (default: 10.0)
+  ANIMATION_DURATION  Animation length (default: 10.0)
+  BUFFER_TIME         Pre-generate buffer (default: 5.0)
         """
     )
-    parser.add_argument('-s', '--single', metavar='DESC', help='Single generation mode')
-    parser.add_argument('-i', '--interval', type=int, metavar='SEC', help='Minimum interval (seconds)')
-    parser.add_argument('-d', '--duration', type=float, metavar='SEC', help='Animation duration (seconds)')
-    parser.add_argument('-r', '--retries', type=int, metavar='NUM', help='Max retry attempts (default: 3)')
-    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose debug output')
-    parser.add_argument('--version', action='version', version='VFD Animation Agent v1.0')
+    parser.add_argument('-d', '--duration', type=float, metavar='SEC', help='Animation duration')
+    parser.add_argument('-b', '--buffer', type=float, metavar='SEC', help='Generation buffer time')
+    parser.add_argument('-v', '--verbose', action='store_true', help='Verbose debug')
+    parser.add_argument('--version', action='version', version='VFD Agent v2.0')
     
     args = parser.parse_args()
     
     VERBOSE = args.verbose
-    if args.interval: MIN_INTERVAL = args.interval
     if args.duration: ANIMATION_DURATION = args.duration
-    if args.retries: MAX_RETRIES = args.retries
+    if args.buffer: BUFFER_TIME = args.buffer
     
-    # Setup directories
+    # Setup
     script_dir = Path(__file__).parent
     output_dir = script_dir / 'generated_animations'
     output_dir.mkdir(exist_ok=True)
     
     state = State(output_dir / 'agent_state.json')
+    animation_queue = queue.Queue(maxsize=QUEUE_SIZE)
     
-    # Initialize and run
+    # Initialize
     init_check()
     
+    # Start threads
+    header("Starting Continuous Display")
+    info("Display will NEVER be blank")
+    info("Animations generate in background")
+    info("Press Ctrl+C to stop")
+    
+    generator = Generator(animation_queue, state, output_dir)
+    display = DisplayController(animation_queue, state)
+    
     try:
-        if args.single:
-            single_mode(output_dir, state, args.single)
-        else:
-            continuous_mode(output_dir, state)
+        # Pre-generate initial animations
+        info("Pre-generating initial animations...")
+        generator.start()
+        
+        # Wait for queue to fill
+        while animation_queue.qsize() < QUEUE_SIZE:
+            time.sleep(0.5)
+        
+        ok(f"Queue filled ({animation_queue.qsize()} ready)")
+        
+        # Start display
+        display.start()
+        display.run()
+        
     except KeyboardInterrupt:
-        info("\nStopped gracefully")
-        sys.exit(0)
+        info("\nStopping gracefully...")
+    except Exception as e:
+        err(f"Fatal error: {e}")
+        import traceback
+        traceback.print_exc()
+    finally:
+        generator.stop()
+        display.stop()
+        info("Stopped")
 
 if __name__ == '__main__':
     main()
