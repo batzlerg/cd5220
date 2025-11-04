@@ -255,7 +255,7 @@ def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_err
         'prompt': full_prompt,
         'stream': False,
         'options': {
-            'temperature': max(0.4, 0.8 - (attempt * 0.08)),
+            'temperature': max(0.6, 0.85 - (attempt * 0.05)),
             'num_predict': 2048,
             'stop': ['\nif __name__']
         }

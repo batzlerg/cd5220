@@ -1,28 +1,28 @@
-Create FULL-SCREEN animated function for 20x2 VFD. Both rows MUST show motion!
+Animate 20x2 VFD display. Both rows must move.
 
-CRITICAL RULES:
-1. def FUNCNAME(animator: DiffAnimator, duration: float = 10.0)
-2. animator.write_frame(line1_20char, line2_20char) - call every frame
-3. animator.frame_sleep(1.0/animator.frame_rate)
-4. text[:20].ljust(20) for exact 20 chars
-5. frame_count = int(duration * animator.frame_rate)
-6. Use 'frame' variable to create MOTION
-7. Libraries: random, math
-8. BOTH line1 AND line2 must have content/motion - NOT just one row!
-9. Use FULL WIDTH (14+ of 20 columns active)
+RULES:
+• def FUNCNAME(animator: DiffAnimator, duration: float = 10.0)
+• animator.write_frame(line1, line2) - call every frame
+• animator.frame_sleep(1.0/animator.frame_rate)
+• text[:20].ljust(20) ensures 20 chars
+• frame_count = int(duration * animator.frame_rate)
+• Use 'frame' for motion
+• Libraries: random, math
+• BOTH line1 AND line2 must animate (not static)
+• Use FULL 20-char width (14+ cols active)
 
-CHARACTER FAMILIES (use variety!):
-- Rotational: | / - \ < ^ > v
-- Density: . o O @ * # % +
-- Organic: . o O * ~ -
-- Structural: [ ] ( ) { } = _
+CHARACTER SETS (use variety):
+• Rotation: | / - \ < ^ > v
+• Density: . o O @ * # % +
+• Organic: . o O * ~ -
+• Structure: [ ] ( ) { } = _
 
 SPATIAL PATTERNS:
-- CROSS-ROW: Track (x,y) where y in {0,1}, entities move between rows
-- CASCADE: Spawn at row 0, move to row 1, cycle through
-- WAVE: Offset between rows (row2_phase = row1_phase + 3)
-- MIRROR: Symmetric or complementary patterns across rows
-- INDEPENDENT: Different animations per row that coordinate
+• CROSS-ROW: Track (x,y) where y∈{0,1}, entities move between rows
+• CASCADE: Spawn row 0, move to row 1, cycle
+• WAVE: Offset phases (row2 = row1 + offset)
+• MIRROR: Symmetric or complementary across rows
+• INDEPENDENT: Different coordinated animations per row
 
 EXAMPLES:
 
@@ -97,4 +97,3 @@ def wave_sync(animator: DiffAnimator, duration: float = 10.0):
         animator.frame_sleep(1.0 / animator.frame_rate)
 
 OUTPUT ONLY CODE. NO MARKDOWN.
-
