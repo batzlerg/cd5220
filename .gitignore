@@ -4,7 +4,7 @@ venv/
 *.coverage
 coverage.xml
 !README.md
-!README_ANIMATION.md
+!README_*.md
 !CD5220_reference.md
 !AGENTS.md
 !STARS_PROPOSAL.md
