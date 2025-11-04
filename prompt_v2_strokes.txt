@@ -1,0 +1,228 @@
+VFD STROKE ANIMATION PROMPT v2.0: CHARACTER EVOLUTION FOCUSED
+
+VISION: Living ASCII Strokes, Not Waterfalls
+
+Replace aggressive lateral cascades with character evolution at fixed positions.
+Emphasis: Character pulsing/morphing DRIVES the aesthetic, not spatial movement.
+
+---
+
+CRITICAL RULES (SAME AS BEFORE):
+1. def FUNCNAME(animator: DiffAnimator, duration: float = 10.0)
+2. animator.write_frame(line1_20char, line2_20char)
+3. animator.frame_sleep(1.0/animator.frame_rate)
+4. text[:20].ljust(20) for exact 20 chars
+5. frame_count = int(duration * animator.frame_rate)
+6. Both line1 AND line2 must have meaningful content
+7. Use FULL WIDTH (14+ of 20 columns active)
+8. Libraries: random, math
+
+---
+
+NEW AESTHETIC RULES (PRIMARY GUIDANCE):
+
+RULE A: CHARACTER EVOLUTION OVER SPATIAL MOVEMENT
+- Characters should CHANGE every 2-4 frames (high temporal frequency)
+- Spatial movement should be MINIMAL (max 1-2 cells per 10-frame cycle)
+- Avoid cascading columns or rapid horizontal sweeps
+- Instead: Same cell evolves through character sequence
+
+RULE B: FRAME-BASED STATE CHANGES (Foundation of "Living" Effects)
+- Use modulo arithmetic to cycle through character states
+- Example: state = (frame // 3) % 4  (changes state every 3 frames, 4 states)
+- Map states to character progression (density palette preferred)
+- This makes animations feel organic, not mechanical
+
+RULE C: DENSITY PALETTES (In-Place Evolution)
+Primary palette: . o O * #  (or variations)
+Cycle through this sequence at each position across multiple frames.
+Example cycle of 40 frames using 5-character palette:
+  Frames 0-7:   . . . . . . . .
+  Frames 8-15:  o o o o o o o o
+  Frames 16-23: O O O O O O O O
+  Frames 24-31: * * * * * * * *
+  Frames 32-39: # # # # # # # #
+Then repeat.
+
+RULE D: SYNCHRONIZED ROWS (Optional but Powerful)
+When both rows use same character evolution sequence (same frame-based state),
+creates synchronized "breathing" or "pulsing" aesthetic.
+Example: Both rows evolve through . o O * # O o . cycle in lockstep.
+
+RULE E: SLOW DRIFT (When Movement is Desired)
+If horizontal movement happens, make it subtle:
+- Move 1-2 cells per 20+ frames (0.05-0.1 cells/frame, vs current 0.5-1 cells/frame)
+- Combine with character evolution (character changes WHILE slowly drifting)
+- Creates "flowing" sensation without "falling" sensation
+
+RULE F: AVOID CASCADING PATTERNS
+Do NOT generate code like:
+  - Rapid column-by-column fills (cascade antipattern)
+  - Water-like downward flows with frame % 2 movement
+  - Synchronized left/right sweeps
+Instead generate code with in-place character cycles or very slow drift.
+
+---
+
+CHARACTER FAMILIES & PALETTES
+
+PALETTE 1: DENSITY (Zero Movement, Maximum Life)
+  Characters: . o O * #
+  Pattern: Cycle through sequence at fixed positions
+  Effect: Pulsing, breathing, nodes throbbing
+  Both rows: CAN be synchronized
+  Example motion: None (or drift 1 cell per 50 frames)
+
+PALETTE 2: FLOW (Slow Drift + Character Evolution)
+  Characters: , . * o O
+  Pattern: Character cycles WHILE drifting slowly leftward/rightward
+  Drift speed: 1 cell per 20-30 frames (barely noticeable)
+  Effect: Organic flowing motion, not mechanical
+  Both rows: Often independent
+
+PALETTE 3: STRUCTURAL (Rotation Illusion)
+  Characters: | / - \ (or variations with brackets)
+  Pattern: Cycle through rotation sequence at fixed position(s)
+  Effect: Vortex, rotating frame, geometric synchronization
+  Both rows: Usually synchronized for visual cohesion
+
+PALETTE 4: HYBRID MORPHING (Dual-Layer Evolution)
+  Row 1 character sequence: . o O * O o .
+  Row 2 character sequence: . * O o O * . (offset phase)
+  Pattern: Both evolve simultaneously, creating interference patterns
+  Effect: Complex, meditative, high aesthetic impact
+  Both rows: Carefully orchestrated phase offset
+
+---
+
+SPATIAL PATTERNS (UPDATED)
+
+Instead of CROSS_ROW, CASCADE, WAVE, BOUNCE:
+Generate these new patterns:
+
+BREATHING: Both rows cycle through same density palette in lockstep
+  - Frame-based state drives effect
+  - Zero spatial movement
+  - Example: frame_state = (frame // 4) % 5
+  - Character at each cell: PALETTE[frame_state]
+
+DRIFTING: Slow character movement with evolution
+  - Horizontal position drifts 1 cell per 20-50 frames
+  - Character state changes every 2-4 frames
+  - Combines spatial movement with temporal character change
+
+PULSING: Specific rows or columns pulse in/out
+  - Width or density changes based on frame count
+  - Character density increases/decreases
+  - Position stays same
+
+ROTATING: Structural characters cycle through rotation
+  - Characters | / - \ cycle at fixed positions
+  - Creates illusion of rotation without movement
+  - Can fill entire display for synchronized effect
+
+ECHO: One pattern leads, second follows with delay
+  - Row 1 character state: (frame // 3) % 4
+  - Row 2 character state: ((frame - 10) // 3) % 4
+  - Creates wave-like effect through time, not space
+
+---
+
+EXAMPLES (Character-Evolution Focused)
+
+BREATHING PATTERN:
+  palette = ['.', 'o', 'O', '*', '#']
+  for frame in range(frame_count):
+      state = (frame // 4) % len(palette)  # Changes every 4 frames
+      char = palette[state]
+      line1 = char * 20
+      line2 = char * 20
+      animator.write_frame(line1, line2)
+      animator.frame_sleep(1.0 / animator.frame_rate)
+
+DRIFTING PARTICLES:
+  palette = [',', '.', '*', 'o', 'O']
+  positions = [5, 10, 15]  # Fixed starting positions
+  for frame in range(frame_count):
+      char_state = (frame // 3) % len(palette)  # Character cycles
+      drift = (frame // 20) % 2  # Drifts 1 cell per 20 frames
+      char = palette[char_state]
+      
+      line1 = [' '] * 20
+      line2 = [' '] * 20
+      for pos in positions:
+          new_pos = (pos + drift) % 20
+          if random.random() < 0.7:
+              line1[new_pos] = char
+          if random.random() < 0.7:
+              line2[new_pos] = char
+      
+      animator.write_frame(''.join(line1), ''.join(line2))
+      animator.frame_sleep(1.0 / animator.frame_rate)
+
+ROTATING VORTEX:
+  rotation_chars = ['|', '/', '-', '\\']
+  for frame in range(frame_count):
+      char_idx = (frame // 2) % len(rotation_chars)  # Rotates every 2 frames
+      char = rotation_chars[char_idx]
+      
+      line1 = [' '] * 20
+      line2 = [' '] * 20
+      
+      line1[5] = char
+      line1[10] = char
+      line1[15] = char
+      
+      line2[5] = char
+      line2[10] = char
+      line2[15] = char
+      
+      animator.write_frame(''.join(line1), ''.join(line2))
+      animator.frame_sleep(1.0 / animator.frame_rate)
+
+ECHO EFFECT:
+  palette = ['.', 'o', 'O', '*']
+  for frame in range(frame_count):
+      state1 = (frame // 3) % len(palette)
+      state2 = ((frame - 15) // 3) % len(palette)
+      
+      char1 = palette[state1]
+      char2 = palette[state2] if (frame - 15) >= 0 else ' '
+      
+      line1 = (char1 * 10) + ' ' * 10
+      line2 = (char2 * 10) + ' ' * 10
+      
+      animator.write_frame(line1, line2)
+      animator.frame_sleep(1.0 / animator.frame_rate)
+
+---
+
+FORBIDDEN PATTERNS (Anti-Patterns)
+
+AVOID:
+- Rapid column sweeping (frame % 2 movement left/right across entire display)
+- Waterfall cascades (particles spawning at top, falling to bottom)
+- 10+ cell-per-second lateral motion
+- Character set changes ONLY for movement (no state cycles)
+- Empty cascading columns (use density palettes instead)
+- Uniform horizontal waves without character evolution
+
+REPLACE WITH:
+- Frame-based state changes (character evolution)
+- Minimal positional drift (1 cell per 20+ frames)
+- Synchronized character cycles (breathing effects)
+- Density palettes at fixed positions
+- Structural character rotation (illusion of motion without actual movement)
+
+---
+
+OUTPUT ONLY CODE. NO MARKDOWN.
+
+All generated code must:
+1. Use character evolution as PRIMARY aesthetic
+2. Minimize lateral movement
+3. Include frame-based state cycling
+4. Feel organic and meditative, not mechanical
+5. Both rows actively involved (not cascading down)
+
+This is the key to "living strokes" instead of "falling waterfalls".

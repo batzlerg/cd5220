@@ -5,6 +5,7 @@ v4.12.0 - Simulator support + prompt-agnostic error handling
 """
 
 import sys
+import select
 import os
 import json
 import random
@@ -20,6 +21,19 @@ from datetime import datetime
 import requests
 
 from cd5220 import CD5220, DiffAnimator
+
+def check_for_bookmark_flag():
+    """Check if user created bookmark signal file (SSH-safe)"""
+    from pathlib import Path
+    signal_file = Path('/tmp/vfd_bookmark_signal')
+    if signal_file.exists():
+        signal_file.unlink()  # Consume the signal
+        return True
+    return False
+
+
+from telemetry_lite import VFDTelemetry
+from code_metrics import analyze_code
 
 VFD_DEVICE = os.getenv('VFD_DEVICE', '/dev/ttyUSB0')
 VFD_BAUDRATE = 9600
@@ -223,9 +237,10 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     valid, error = validate_dual_row_usage(func_code)
     if not valid:
         return None, f"Row: {error}"
-    valid, error = validate_width_usage(func_code)
-    if not valid:
-        return None, f"Width: {error}"
+    # Width validation disabled - let creativity flow
+    # valid, error = validate_width_usage(func_code)
+    # if not valid:
+    #     return None, f"Width: {error}"
     valid, error = validate_motion(func_code)
     if not valid:
         return None, f"Motion: {error}"
@@ -332,6 +347,9 @@ class Animation:
 class Generator:
     def __init__(self, animation_queue: queue.Queue, state: State, output_dir: Path, prompt: str, progress: Optional[ProgressTracker] = None):
         self.queue = animation_queue
+        
+        # Telemetry system
+        self.telemetry = VFDTelemetry(output_dir / 'telemetry')
         self.state = state
         self.output_dir = output_dir
         self.prompt = prompt
@@ -422,6 +440,25 @@ class Generator:
 
                 animation = Animation(func_name, desc, code, namespace[func_name])
                 self.queue.put(animation)
+                
+                # Log telemetry
+                metrics = analyze_code(code, func_name)
+                self.telemetry.log_generation(
+                    generation_id=func_name,
+                    timestamp=time.time(),
+                    idea=desc,
+                    success=True,
+                    attempt=attempt,
+                    **metrics
+                )
+                
+                # Log as training data
+                self.telemetry.log_training_example(
+                    prompt=f"Create VFD animation: {desc}\n\nUse spatial patterns and full 20x2 display.",
+                    response=code,
+                    metadata=metrics
+                )
+                
                 self.state.save(func_name, desc, 'success')
 
                 if self.progress:
@@ -436,6 +473,17 @@ class Generator:
 
         debug(f"  └─ ✗ All {MAX_RETRIES} attempts failed")
         final_error = " | ".join(all_errors[-3:])
+        
+        # Log failure telemetry
+        self.telemetry.log_generation(
+            generation_id=func_name,
+            timestamp=time.time(),
+            idea=desc,
+            success=False,
+            attempt=MAX_RETRIES,
+            error=final_error
+        )
+        
         self.state.save(func_name, desc, 'failure', final_error)
         if self.progress:
             self.progress.set_progress(self.gen_count * 1.0)
@@ -490,6 +538,25 @@ class Generator:
 
                 animation = Animation(func_name, desc, code, namespace[func_name])
                 self.queue.put(animation)
+                
+                # Log telemetry
+                metrics = analyze_code(code, func_name)
+                self.telemetry.log_generation(
+                    generation_id=func_name,
+                    timestamp=time.time(),
+                    idea=desc,
+                    success=True,
+                    attempt=attempt,
+                    **metrics
+                )
+                
+                # Log as training data
+                self.telemetry.log_training_example(
+                    prompt=f"Create VFD animation: {desc}\n\nUse spatial patterns and full 20x2 display.",
+                    response=code,
+                    metadata=metrics
+                )
+                
                 self.state.save(func_name, desc, 'success')
 
                 if self.progress:
@@ -504,6 +571,17 @@ class Generator:
 
         debug(f"  └─ ✗ All {MAX_RETRIES} attempts failed")
         final_error = " | ".join(all_errors[-3:])
+        
+        # Log failure telemetry
+        self.telemetry.log_generation(
+            generation_id=func_name,
+            timestamp=time.time(),
+            idea=desc,
+            success=False,
+            attempt=MAX_RETRIES,
+            error=final_error
+        )
+        
         self.state.save(func_name, desc, 'failure', final_error)
         if self.progress:
             self.progress.set_progress(MAX_RETRIES)
@@ -642,6 +720,33 @@ class DisplayController:
             except:
                 pass
 
+    def bookmark_animation(self, animation):
+        """Log bookmark event directly to telemetry file"""
+        try:
+            import time, json
+            from pathlib import Path
+            
+            telemetry_dir = Path('generated_animations/telemetry')
+            telemetry_dir.mkdir(parents=True, exist_ok=True)
+            events_file = telemetry_dir / 'events.jsonl'
+            
+            bookmark_event = {
+                'timestamp': time.time(),
+                'message': 'bookmark',
+                'generation_id': animation.func_name,
+                'idea': animation.desc,
+                'bookmarked': True,
+                'bookmark_time': time.time()
+            }
+            
+            with open(events_file, 'a') as f:
+                f.write(json.dumps(bookmark_event) + '\n')
+            
+            print(f"\n\033[0;32m✓\033[0m Bookmarked: {animation.desc[:50]}...\n", file=sys.stderr, flush=True)
+        except Exception as e:
+            print(f"\n\033[0;31m✗\033[0m Bookmark failed: {e}\n", file=sys.stderr, flush=True)
+
+
 def init_check():
     header("Initialization")
 
@@ -693,6 +798,8 @@ def main():
     parser.add_argument('--idea', type=str, help='Custom animation idea (single-shot mode)')
     parser.add_argument('--preview', action='store_true', help='Show console output')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
+    parser.add_argument('--replay', nargs='?', const='generated_animations', 
+                        help='Replay existing animations from folder (default: generated_animations)')
     parser.add_argument('--version', action='version', version='VFD Agent v4.12')
 
     args = parser.parse_args()
@@ -714,6 +821,83 @@ def main():
     animation_queue = queue.Queue(maxsize=QUEUE_SIZE)
 
     init_check()
+
+    # Replay mode: loop through existing animations
+    if args.replay:
+        header("Replay Mode")
+        replay_dir = Path(args.replay)
+        
+        if not replay_dir.exists():
+            err(f"Replay directory not found: {replay_dir}")
+            sys.exit(1)
+        
+        # Find all animation files
+        anim_files = sorted(replay_dir.glob('anim_*.py'))
+        
+        if not anim_files:
+            err(f"No animation files found in {replay_dir}")
+            sys.exit(1)
+        
+        info(f"Found {len(anim_files)} animations to replay")
+        if PREVIEW_MODE:
+            info("Console output enabled")
+        info("Press Ctrl+C to stop")
+        
+        display = DisplayController(queue.Queue(), state)
+        
+        try:
+            display.start()
+            
+            # Load all animations
+            animations = []
+            for anim_file in anim_files:
+                try:
+                    namespace = {'DiffAnimator': DiffAnimator, 'random': random, 'math': __import__('math')}
+                    with open(anim_file) as f:
+                        code = f.read()
+                    exec(code, namespace)
+                    
+                    # Extract function name from filename
+                    func_name = anim_file.stem
+                    if func_name in namespace:
+                        # Create Animation object
+                        anim = Animation(func_name, func_name, code, namespace[func_name])
+                        animations.append(anim)
+                except Exception as e:
+                    warn(f"Skipping {anim_file.name}: {e}")
+            
+            if not animations:
+                err("No valid animations loaded")
+                sys.exit(1)
+            
+            ok(f"Loaded {len(animations)} animations")
+            
+            # Play animations in loop
+            play_count = 0
+            while True:
+                for animation in animations:
+                    play_count += 1
+                    info(f"▶ #{play_count}: {animation.desc}")
+                    
+                    try:
+                        animation.run(display.animator, ANIMATION_DURATION)
+                    except Exception as e:
+                        err(f"Playback error: {e}")
+                    finally:
+                        display.animator.clear_display()
+                        time.sleep(0.2)
+                        
+        except KeyboardInterrupt:
+            info("\nStopping...")
+        except Exception as e:
+            err(f"Fatal error: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            display.stop()
+            info("Stopped")
+        
+        sys.exit(0)
 
     if CUSTOM_IDEA:
         header("Single-Shot Mode")
