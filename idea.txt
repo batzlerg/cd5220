@@ -1,0 +1,63 @@
+# VFD Animation Idea Words
+# Format: word:pos where pos is v (verb), n (noun), or a (adjective)
+# Lines without :pos tags will be skipped with a warning
+
+# Motion verbs (use :v)
+bounce:v
+drift:v
+spin:v
+pulse:v
+cascade:v
+flow:v
+expand:v
+contract:v
+oscillate:v
+ripple:v
+sweep:v
+rotate:v
+shift:v
+glide:v
+flutter:v
+spiral:v
+converge:v
+scatter:v
+breathe:v
+
+# Visual elements (use :n)
+sparks:n
+arrows:n
+dots:n
+waves:n
+particles:n
+clusters:n
+rings:n
+bars:n
+lines:n
+segments:n
+pulses:n
+columns:n
+beams:n
+trails:n
+halos:n
+fields:n
+wedges:n
+entities:n
+forms:n
+shapes:n
+
+# Spatial descriptors (use :a)
+alternating:a
+mirrored:a
+synchronized:a
+offset:a
+paired:a
+stacked:a
+layered:a
+crossing:a
+phased:a
+scattered:a
+converging:a
+radiating:a
+nested:a
+symmetric:a
+rhythmic:a

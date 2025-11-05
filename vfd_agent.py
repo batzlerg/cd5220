@@ -2,7 +2,7 @@
 """
 VFD Animation Agent - AI-Driven VFD Art Display
 Production-ready continuous animation generation with telemetry
-Version: 4.14.0 - Fixed keyboard bookmarking in all modes
+Version: 4.15.0 - Added downvote system + configurable idea generation
 """
 
 import sys
@@ -26,6 +26,7 @@ import requests
 from cd5220 import CD5220, DiffAnimator
 from telemetry_lite import VFDTelemetry
 from code_metrics import analyze_code
+from idea_generator import generate_idea  # ★ NEW IMPORT
 
 # Configuration
 VFD_DEVICE = os.getenv('VFD_DEVICE', '/dev/ttyUSB0')
@@ -74,50 +75,61 @@ def header(msg: str):
 
 
 class KeyboardListener:
-    """Non-blocking keyboard listener for 'b' key bookmarks"""
+    """Non-blocking keyboard listener for 'b' (bookmark) and 'd' (downvote) keys"""
     def __init__(self):
         self.bookmark_pressed = False
+        self.downvote_pressed = False  # ★ NEW
         self.running = False
         self.thread = None
         self.old_settings = None
-        
+
     def start(self):
-        """Start listening for 'b' key presses in background thread"""
+        """Start listening for key presses in background thread"""
         if not sys.stdin.isatty():
             debug("Not a TTY, keyboard listener disabled")
             return
-            
+
         self.running = True
         self.thread = threading.Thread(target=self._listen, daemon=True)
         self.thread.start()
         debug("Keyboard listener started")
-        
+
     def stop(self):
         """Stop the listener"""
         self.running = False
         if self.thread:
             self.thread.join(timeout=0.5)
-            
+
     def check_and_clear(self) -> bool:
         """Check if 'b' was pressed and clear the flag"""
         if self.bookmark_pressed:
             self.bookmark_pressed = False
             return True
         return False
-        
+
+    def check_and_clear_downvote(self) -> bool:  # ★ NEW
+        """Check if 'd' was pressed and clear the flag"""
+        if self.downvote_pressed:
+            self.downvote_pressed = False
+            return True
+        return False
+
     def _listen(self):
-        """Background thread that polls for 'b' key"""
+        """Background thread that polls for 'b' and 'd' keys"""
         try:
             self.old_settings = termios.tcgetattr(sys.stdin)
             tty.setcbreak(sys.stdin.fileno())
-            
+
             while self.running:
                 # Non-blocking check for input
                 if select.select([sys.stdin], [], [], 0.05)[0]:
                     ch = sys.stdin.read(1).lower()
                     if ch == 'b':
                         self.bookmark_pressed = True
-                        print(f"\n{C.OK}[★ Bookmark signal received!]{C.RESET}\n", file=sys.stderr, flush=True)
+                        print(f"\n{C.OK}[★ Bookmark recorded!]{C.RESET}\n", file=sys.stderr, flush=True)
+                    elif ch == 'd':  # ★ NEW
+                        self.downvote_pressed = True
+                        print(f"\n{C.ERR}[✗ Downvote recorded!]{C.RESET}\n", file=sys.stderr, flush=True)
         except Exception as e:
             debug(f"Keyboard listener error: {e}")
         finally:
@@ -222,18 +234,7 @@ class DualAnimator:
         self.hardware.clear_display()
 
 
-def generate_idea() -> str:
-    """Generate random animation idea"""
-    if CUSTOM_IDEA:
-        return CUSTOM_IDEA
-
-    patterns = ['cascade', 'wave', 'bounce', 'drift', 'pulse', 'spin', 'sweep',
-                'flow', 'ripple', 'orbit', 'scatter', 'converge', 'spiral']
-    elements = ['rain', 'stars', 'dots', 'particles', 'waves', 'lines', 'symbols',
-                'arrows', 'rings', 'trails', 'sparks', 'bubbles', 'snowflakes']
-    modifiers = ['dual row', 'synchronized', 'mirrored', 'offset', 'alternating',
-                 'crossing', 'rising', 'falling', 'expanding', 'contracting']
-    return f"{random.choice(modifiers)} {random.choice(patterns)} {random.choice(elements)}"
+# ★ REMOVED OLD generate_idea() FUNCTION - now imported from idea_generator
 
 
 def validate_dual_row_usage(code: str) -> Tuple[bool, str]:
@@ -264,7 +265,7 @@ def validate_motion(code: str) -> Tuple[bool, str]:
 
 def validate_character_variety(code: str) -> Tuple[bool, str]:
     chars = set()
-    for match in re.finditer(r'["\']([^"\']+)["\']', code):
+    for match in re.finditer(r'["\']([\s\S]+?)["\']', code):
         chars.update(c for c in match.group(1) if c not in ' \n\t')
     if len(chars) >= 4:
         return True, ""
@@ -743,11 +744,15 @@ class DisplayController:
 
                 try:
                     animation.run(self.animator, ANIMATION_DURATION)
-                    
-                    # ★ CHECK FOR BOOKMARK
+
+                    # CHECK FOR BOOKMARK
                     if self.keyboard and self.keyboard.check_and_clear():
                         self.bookmark_animation(animation)
-                        
+
+                    # ★ CHECK FOR DOWNVOTE
+                    if self.keyboard and self.keyboard.check_and_clear_downvote():
+                        self.downvote_animation(animation)
+
                 except Exception as e:
                     err(f"Playback error: {e}")
                 finally:
@@ -774,9 +779,13 @@ class DisplayController:
 
                 animation.run(self.animator, ANIMATION_DURATION)
 
-                # ★ CHECK FOR BOOKMARK
+                # CHECK FOR BOOKMARK
                 if self.keyboard and self.keyboard.check_and_clear():
                     self.bookmark_animation(animation)
+
+                # ★ CHECK FOR DOWNVOTE
+                if self.keyboard and self.keyboard.check_and_clear_downvote():
+                    self.downvote_animation(animation)
 
                 self.animator.clear_display()
                 time.sleep(0.2)
@@ -831,6 +840,29 @@ class DisplayController:
         except Exception as e:
             err(f"Bookmark failed: {e}")
 
+    def downvote_animation(self, animation):  # ★ NEW
+        """Log downvote event to telemetry"""
+        try:
+            telemetry_dir = Path('generated_animations/telemetry')
+            telemetry_dir.mkdir(parents=True, exist_ok=True)
+            events_file = telemetry_dir / 'events.jsonl'
+
+            downvote_event = {
+                'timestamp': datetime.now().isoformat(),
+                'message': 'downvote',
+                'generation_id': animation.func_name,
+                'idea': animation.desc,
+                'downvoted': True,
+                'downvote_time': time.time()
+            }
+
+            with open(events_file, 'a') as f:
+                f.write(json.dumps(downvote_event) + '\n')
+
+            err(f"✗ Downvoted: {animation.desc[:40]}")
+        except Exception as e:
+            err(f"Downvote failed: {e}")
+
 
 def init_check():
     """Validate system requirements before starting"""
@@ -878,7 +910,7 @@ def init_check():
 def main():
     global VERBOSE, ANIMATION_DURATION, PREVIEW_MODE, FRAME_RATE, CUSTOM_IDEA
 
-    parser = argparse.ArgumentParser(description='VFD Animation Agent v4.14')
+    parser = argparse.ArgumentParser(description='VFD Animation Agent v4.15')
     parser.add_argument('-d', '--duration', type=float, help='Animation duration in seconds')
     parser.add_argument('-f', '--fps', type=int, help='Frame rate in Hz')
     parser.add_argument('-p', '--prompt', type=str, default=DEFAULT_PROMPT_FILE, help='Prompt file path')
@@ -887,7 +919,7 @@ def main():
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
     parser.add_argument('--replay', nargs='?', const='generated_animations',
                         help='Replay existing animations from folder (default: generated_animations)')
-    parser.add_argument('--version', action='version', version='VFD Agent v4.14')
+    parser.add_argument('--version', action='version', version='VFD Agent v4.15')
 
     args = parser.parse_args()
 
@@ -909,7 +941,7 @@ def main():
 
     init_check()
 
-    # ★ REPLAY MODE - FIXED TO SUPPORT BOOKMARKING
+    # REPLAY MODE
     if args.replay:
         header("Replay Mode")
         replay_dir = Path(args.replay)
@@ -928,14 +960,13 @@ def main():
         info(f"Found {len(anim_files)} animations to replay")
         if PREVIEW_MODE:
             info("Console output enabled")
-        info("Press 'b' to bookmark, Ctrl+C to stop")
+        info("Press 'b' to bookmark, 'd' to downvote, Ctrl+C to stop")  # ★ UPDATED
 
-        # ★ INITIALIZE KEYBOARD LISTENER
         keyboard = KeyboardListener()
         display = DisplayController(queue.Queue(), state, keyboard)
 
         try:
-            keyboard.start()  # ★ START LISTENER
+            keyboard.start()
             display.start()
 
             # Load all animations
@@ -947,10 +978,8 @@ def main():
                         code = f.read()
                     exec(code, namespace)
 
-                    # Extract function name from filename
                     func_name = anim_file.stem
                     if func_name in namespace:
-                        # Create Animation object
                         anim = Animation(func_name, func_name, code, namespace[func_name])
                         animations.append(anim)
                 except Exception as e:
@@ -971,11 +1000,15 @@ def main():
 
                     try:
                         animation.run(display.animator, ANIMATION_DURATION)
-                        
-                        # ★ CHECK FOR BOOKMARK IN REPLAY MODE
+
+                        # CHECK FOR BOOKMARK
                         if keyboard.check_and_clear():
                             display.bookmark_animation(animation)
-                            
+
+                        # ★ CHECK FOR DOWNVOTE IN REPLAY
+                        if keyboard.check_and_clear_downvote():
+                            display.downvote_animation(animation)
+
                     except Exception as e:
                         err(f"Playback error: {e}")
                     finally:
@@ -989,29 +1022,28 @@ def main():
             import traceback
             traceback.print_exc()
         finally:
-            keyboard.stop()  # ★ STOP LISTENER
+            keyboard.stop()
             display.stop()
             info("Stopped")
 
         sys.exit(0)
 
-    # ★ SINGLE-SHOT MODE WITH KEYBOARD LISTENER
+    # SINGLE-SHOT MODE
     if CUSTOM_IDEA:
         header("Single-Shot Mode")
         info("Generating ONE animation, will loop forever")
         if PREVIEW_MODE:
             info("Console output enabled")
-        info("Press 'b' to bookmark, Ctrl+C to stop")
+        info("Press 'b' to bookmark, 'd' to downvote, Ctrl+C to stop")  # ★ UPDATED
 
         progress = ProgressTracker(MAX_RETRIES)
         generator = Generator(animation_queue, state, output_dir, prompt, progress)
-        
-        # ★ INITIALIZE KEYBOARD LISTENER
+
         keyboard = KeyboardListener()
         display = DisplayController(animation_queue, state, keyboard)
 
         try:
-            keyboard.start()  # ★ START LISTENER
+            keyboard.start()
             display.start()
 
             info("Generating animation...")
@@ -1044,28 +1076,27 @@ def main():
             import traceback
             traceback.print_exc()
         finally:
-            keyboard.stop()  # ★ STOP LISTENER
+            keyboard.stop()
             display.stop()
             info("Stopped")
 
-    # ★ CONTINUOUS MODE WITH KEYBOARD LISTENER
+    # CONTINUOUS MODE
     else:
         header("Continuous Generation Mode")
         info("Display will NEVER be blank")
         info("Animations generate in background")
         if PREVIEW_MODE:
             info("Console output enabled")
-        info("Press 'b' to bookmark, Ctrl+C to stop")
+        info("Press 'b' to bookmark, 'd' to downvote, Ctrl+C to stop")  # ★ UPDATED
 
         progress = ProgressTracker(QUEUE_SIZE)
         generator = Generator(animation_queue, state, output_dir, prompt, progress)
-        
-        # ★ INITIALIZE KEYBOARD LISTENER
+
         keyboard = KeyboardListener()
         display = DisplayController(animation_queue, state, keyboard)
 
         try:
-            keyboard.start()  # ★ START LISTENER
+            keyboard.start()
             display.start()
 
             info("Pre-generating initial animations...")
@@ -1101,7 +1132,7 @@ def main():
             traceback.print_exc()
         finally:
             try:
-                keyboard.stop()  # ★ STOP LISTENER
+                keyboard.stop()
                 generator.stop()
                 display.stop()
                 info("Stopped")

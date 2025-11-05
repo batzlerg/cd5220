@@ -187,7 +187,7 @@ def bookmarks():
     if not generations.empty:
         gen_cols = generations[['generation_id', 'unique_chars_count']].copy()
         bookmarks_df = bookmarks_df.merge(gen_cols, on='generation_id', how='left', suffixes=('_bm', '_gen'))
-        
+
         # Use the generation's unique_chars_count
         if 'unique_chars_count_gen' in bookmarks_df.columns:
             bookmarks_df['unique_chars_count'] = bookmarks_df['unique_chars_count_gen']
@@ -219,6 +219,66 @@ def bookmarks():
     return result
 
 
+def downvotes():  # ★ NEW
+    """Show all downvoted animations"""
+    df = load_events()
+    if df.empty:
+        return "No data available"
+
+    downvotes_df = df[df['message'] == 'downvote'].copy()
+
+    if downvotes_df.empty:
+        return "No downvotes recorded. Press 'd' during playback to downvote animations."
+
+    display_cols = ['datetime', 'generation_id', 'idea']
+    display_cols = [c for c in display_cols if c in downvotes_df.columns]
+
+    result = downvotes_df[display_cols].sort_values('datetime', ascending=False)
+
+    print(f"Total downvotes: {len(downvotes_df)}")
+    
+    if 'idea' in downvotes_df.columns:
+        print(f"\nMost downvoted ideas:")
+        idea_counts = downvotes_df.groupby('idea').size().sort_values(ascending=False)
+        print(idea_counts.head(10))
+    
+    print()
+    return result
+
+
+def ratings():  # ★ NEW
+    """Compare bookmarks vs downvotes for net ratings"""
+    df = load_events()
+    if df.empty:
+        return "No data available"
+
+    bookmarks_df = df[df['message'] == 'bookmark']
+    downvotes_df = df[df['message'] == 'downvote']
+
+    print(f"Total bookmarks: {len(bookmarks_df)}")
+    print(f"Total downvotes: {len(downvotes_df)}")
+
+    if bookmarks_df.empty and downvotes_df.empty:
+        return "\nNo ratings data yet."
+
+    print(f"\nNet positive animations:")
+
+    all_ideas = list(set(bookmarks_df['idea'].tolist() + downvotes_df['idea'].tolist()))
+    ratings = []
+    for idea in all_ideas:
+        up = len(bookmarks_df[bookmarks_df['idea'] == idea])
+        down = len(downvotes_df[downvotes_df['idea'] == idea])
+        net = up - down
+        if net > 0:
+            ratings.append((idea, up, down, net))
+
+    ratings.sort(key=lambda x: x[3], reverse=True)
+    for idea, up, down, net in ratings[:15]:
+        print(f"  {idea:40s} +{up} -{down} (net: +{net})")
+
+    return ""
+
+
 def main():
     if len(sys.argv) < 2:
         print("Usage: python3 analyze.py <command>")
@@ -229,6 +289,8 @@ def main():
         print("  trend [days]         - Success rate trend (default: 7 days)")
         print("  export [min_variety] - Export training data (default: min 5)")
         print("  bookmarks            - Show bookmarked animations")
+        print("  downvotes            - Show downvoted animations")
+        print("  ratings              - Compare bookmarks vs downvotes")
         return
 
     command = sys.argv[1]
@@ -258,6 +320,14 @@ def main():
     elif command == 'bookmarks':
         print("\n=== Bookmarked Animations ===")
         print(bookmarks())
+
+    elif command == 'downvotes':  # ★ NEW
+        print("\n=== Downvoted Animations ===")
+        print(downvotes())
+
+    elif command == 'ratings':  # ★ NEW
+        print("\n=== Animation Ratings Summary ===")
+        print(ratings())
 
     else:
         print(f"Unknown command: {command}")
