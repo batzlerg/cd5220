@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-VFD Animation Agent - Production AI Art Display
-v4.12.0 - Simulator support + prompt-agnostic error handling
+VFD Animation Agent - AI-Driven VFD Art Display
+Production-ready continuous animation generation with telemetry
+Version: 4.14.0 - Fixed keyboard bookmarking in all modes
 """
 
 import sys
-import select
 import os
 import json
 import random
@@ -15,26 +15,19 @@ import threading
 import queue
 import logging
 import re
+import termios
+import tty
+import select
 from pathlib import Path
 from typing import Optional, Dict, Tuple, Callable, List
 from datetime import datetime
 import requests
 
 from cd5220 import CD5220, DiffAnimator
-
-def check_for_bookmark_flag():
-    """Check if user created bookmark signal file (SSH-safe)"""
-    from pathlib import Path
-    signal_file = Path('/tmp/vfd_bookmark_signal')
-    if signal_file.exists():
-        signal_file.unlink()  # Consume the signal
-        return True
-    return False
-
-
 from telemetry_lite import VFDTelemetry
 from code_metrics import analyze_code
 
+# Configuration
 VFD_DEVICE = os.getenv('VFD_DEVICE', '/dev/ttyUSB0')
 VFD_BAUDRATE = 9600
 OLLAMA_API_BASE = os.getenv('OLLAMA_API_BASE', 'http://localhost:11434')
@@ -48,19 +41,21 @@ DEFAULT_PROMPT_FILE = 'prompt.txt'
 PREVIEW_MODE = False
 CUSTOM_IDEA = None
 
+# Logging
 logging.getLogger('CD5220').setLevel(logging.WARNING)
 logging.getLogger('urllib3').setLevel(logging.WARNING)
 logging.getLogger('requests').setLevel(logging.WARNING)
 
+# Colors
 class C:
-    INFO = '\033[0;36m'
-    OK = '\033[0;32m'
-    ERR = '\033[0;31m'
-    WARN = '\033[1;33m'
-    DEBUG = '\033[0;35m'
-    BOLD = '\033[1m'
-    DIM = '\033[2m'
-    RESET = '\033[0m'
+    INFO = ''
+    OK = ''
+    ERR = ''
+    WARN = ''
+    DEBUG = ''
+    BOLD = ''
+    DIM = ''
+    RESET = ''
 
 VERBOSE = False
 
@@ -77,7 +72,64 @@ def header(msg: str):
     print(f"{C.BOLD}{msg}{C.RESET}", file=sys.stderr, flush=True)
     print(f"{C.BOLD}{'='*40}{C.RESET}", file=sys.stderr, flush=True)
 
+
+class KeyboardListener:
+    """Non-blocking keyboard listener for 'b' key bookmarks"""
+    def __init__(self):
+        self.bookmark_pressed = False
+        self.running = False
+        self.thread = None
+        self.old_settings = None
+        
+    def start(self):
+        """Start listening for 'b' key presses in background thread"""
+        if not sys.stdin.isatty():
+            debug("Not a TTY, keyboard listener disabled")
+            return
+            
+        self.running = True
+        self.thread = threading.Thread(target=self._listen, daemon=True)
+        self.thread.start()
+        debug("Keyboard listener started")
+        
+    def stop(self):
+        """Stop the listener"""
+        self.running = False
+        if self.thread:
+            self.thread.join(timeout=0.5)
+            
+    def check_and_clear(self) -> bool:
+        """Check if 'b' was pressed and clear the flag"""
+        if self.bookmark_pressed:
+            self.bookmark_pressed = False
+            return True
+        return False
+        
+    def _listen(self):
+        """Background thread that polls for 'b' key"""
+        try:
+            self.old_settings = termios.tcgetattr(sys.stdin)
+            tty.setcbreak(sys.stdin.fileno())
+            
+            while self.running:
+                # Non-blocking check for input
+                if select.select([sys.stdin], [], [], 0.05)[0]:
+                    ch = sys.stdin.read(1).lower()
+                    if ch == 'b':
+                        self.bookmark_pressed = True
+                        print(f"\n{C.OK}[★ Bookmark signal received!]{C.RESET}\n", file=sys.stderr, flush=True)
+        except Exception as e:
+            debug(f"Keyboard listener error: {e}")
+        finally:
+            if self.old_settings:
+                try:
+                    termios.tcsetattr(sys.stdin, termios.TCSADRAIN, self.old_settings)
+                except:
+                    pass
+
+
 def load_prompt(prompt_file: Path) -> str:
+    """Load the generation prompt from file"""
     try:
         with open(prompt_file, 'r') as f:
             prompt = f.read()
@@ -90,7 +142,9 @@ def load_prompt(prompt_file: Path) -> str:
         err(f"Error loading prompt: {e}")
         sys.exit(1)
 
+
 class State:
+    """Thread-safe persistent state tracking"""
     def __init__(self, state_file: Path):
         self.file = state_file
         self.data = self._load()
@@ -108,7 +162,7 @@ class State:
     def save(self, func: str, desc: str, status: str, error: str = ""):
         with self.lock:
             self.data['generations'].append({
-                'timestamp': int(time.time()),
+                'timestamp': datetime.now().isoformat(),
                 'function': func,
                 'description': desc,
                 'status': status,
@@ -129,7 +183,9 @@ class State:
             f = self.data.get('failure', 0)
             return f"✓{s} ✗{f}"
 
+
 class ProgressTracker:
+    """Thread-safe progress tracking for loading animations"""
     def __init__(self, target: int):
         self.target = target
         self.current = 0.0
@@ -143,7 +199,9 @@ class ProgressTracker:
         with self.lock:
             return (self.current, self.target)
 
+
 class DualAnimator:
+    """Animator that outputs to both hardware and console (if preview enabled)"""
     def __init__(self, hardware_animator: DiffAnimator, preview_enabled: bool):
         self.hardware = hardware_animator
         self.preview_enabled = preview_enabled
@@ -152,8 +210,8 @@ class DualAnimator:
     def write_frame(self, line1: str, line2: str):
         self.hardware.write_frame(line1, line2)
         if self.preview_enabled:
-            print(f"\r{'-'*20}", file=sys.stderr, end='', flush=True)
-            print(f"\n{line1}", file=sys.stderr, flush=True)
+            print(f"{'-'*20}", file=sys.stderr, flush=True)
+            print(f"{line1}", file=sys.stderr, flush=True)
             print(f"{line2}", file=sys.stderr, flush=True)
             print(f"{'-'*20}", file=sys.stderr, flush=True)
 
@@ -163,10 +221,12 @@ class DualAnimator:
     def clear_display(self):
         self.hardware.clear_display()
 
+
 def generate_idea() -> str:
+    """Generate random animation idea"""
     if CUSTOM_IDEA:
         return CUSTOM_IDEA
-    
+
     patterns = ['cascade', 'wave', 'bounce', 'drift', 'pulse', 'spin', 'sweep',
                 'flow', 'ripple', 'orbit', 'scatter', 'converge', 'spiral']
     elements = ['rain', 'stars', 'dots', 'particles', 'waves', 'lines', 'symbols',
@@ -175,12 +235,14 @@ def generate_idea() -> str:
                  'crossing', 'rising', 'falling', 'expanding', 'contracting']
     return f"{random.choice(modifiers)} {random.choice(patterns)} {random.choice(elements)}"
 
+
 def validate_dual_row_usage(code: str) -> Tuple[bool, str]:
     has_line1 = 'line1' in code
     has_line2 = 'line2' in code
     if not (has_line1 and has_line2):
         return False, "Missing line1 or line2"
     return True, ""
+
 
 def validate_width_usage(code: str) -> Tuple[bool, str]:
     patterns = [r'range\(\s*20\s*\)', r'\[\s*\' \'\s*\]\s*\*\s*20']
@@ -191,12 +253,14 @@ def validate_width_usage(code: str) -> Tuple[bool, str]:
         return True, ""
     return False, "No full-width usage"
 
+
 def validate_motion(code: str) -> Tuple[bool, str]:
     indicators = ['frame', 'velocity', 'vel', 'position', 'move', 'offset']
     for ind in indicators:
         if ind in code.lower():
             return True, ""
     return False, "No motion logic"
+
 
 def validate_character_variety(code: str) -> Tuple[bool, str]:
     chars = set()
@@ -206,7 +270,9 @@ def validate_character_variety(code: str) -> Tuple[bool, str]:
         return True, ""
     return False, f"Only {len(chars)} chars (need 4+)"
 
+
 def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
+    """Extract and validate function code from LLM response"""
     code = raw_code.replace('python', '').replace(chr(96)*3, '').strip()
     lines = code.split('\n')
     func_start = -1
@@ -237,10 +303,6 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     valid, error = validate_dual_row_usage(func_code)
     if not valid:
         return None, f"Row: {error}"
-    # Width validation disabled - let creativity flow
-    # valid, error = validate_width_usage(func_code)
-    # if not valid:
-    #     return None, f"Width: {error}"
     valid, error = validate_motion(func_code)
     if not valid:
         return None, f"Motion: {error}"
@@ -251,7 +313,9 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
     full_code = f"from cd5220 import DiffAnimator\nimport random\nimport math\n\n{func_code}\n"
     return full_code, ""
 
+
 def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_errors: List[str], output_dir: Path, progress: Optional[ProgressTracker] = None) -> Tuple[Optional[str], str, str]:
+    """Generate animation code via Ollama API"""
     debug(f"Generate attempt {attempt}/{MAX_RETRIES}: {desc}")
 
     retry_context = ""
@@ -282,9 +346,9 @@ def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_err
         raw_code = resp.json().get('response', '')
         if not raw_code:
             return None, "Empty response", ""
-        
+
         code, error = clean_code(raw_code, func_name)
-        
+
         if not code:
             failed_file = output_dir / f"failed_{func_name}_attempt{attempt}.txt"
             try:
@@ -292,25 +356,29 @@ def generate_code(prompt: str, desc: str, func_name: str, attempt: int, prev_err
                 debug(f"  │  Full response saved to: {failed_file.relative_to(Path.cwd())}")
             except Exception as e:
                 debug(f"  │  Could not save failed response: {e}")
-            
+
             preview = raw_code[:200].replace('\n', ' ')
             debug(f"  │  Raw response preview: {preview}...")
-        
+
         return code, error, raw_code
-        
+
     except requests.exceptions.Timeout:
         return None, f"Timeout", ""
     except Exception as e:
         return None, f"Error: {str(e)[:100]}", ""
 
+
 def validate_syntax(code: str) -> Tuple[bool, str]:
+    """Validate Python syntax"""
     try:
         compile(code, '<string>', 'exec')
         return True, ""
     except SyntaxError as e:
         return False, f"Line {e.lineno}: {e.msg}"
 
+
 def validate_runtime(func: Callable, func_name: str) -> Tuple[bool, str]:
+    """Validate runtime behavior with fast test execution"""
     try:
         start_time = time.time()
         test_display = CD5220.create_simulator_only(debug=False, render_console=False)
@@ -329,7 +397,9 @@ def validate_runtime(func: Callable, func_name: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Runtime: {str(e)[:100]}"
 
+
 class Animation:
+    """Container for generated animation code"""
     def __init__(self, func_name: str, desc: str, code: str, callable_func: Callable):
         self.func_name = func_name
         self.desc = desc
@@ -344,11 +414,11 @@ class Animation:
             debug(f"Animation error: {e}")
             raise
 
+
 class Generator:
+    """Background thread that generates animations and fills queue"""
     def __init__(self, animation_queue: queue.Queue, state: State, output_dir: Path, prompt: str, progress: Optional[ProgressTracker] = None):
         self.queue = animation_queue
-        
-        # Telemetry system
         self.telemetry = VFDTelemetry(output_dir / 'telemetry')
         self.state = state
         self.output_dir = output_dir
@@ -418,7 +488,7 @@ class Generator:
                 debug(f"  ├─ ✗ Syntax validation failed: {syntax_error}")
                 all_errors.append(f"Syntax: {syntax_error}")
                 continue
-            
+
             debug(f"  ├─ ✓ Syntax valid")
 
             try:
@@ -440,7 +510,7 @@ class Generator:
 
                 animation = Animation(func_name, desc, code, namespace[func_name])
                 self.queue.put(animation)
-                
+
                 # Log telemetry
                 metrics = analyze_code(code, func_name)
                 self.telemetry.log_generation(
@@ -451,14 +521,14 @@ class Generator:
                     attempt=attempt,
                     **metrics
                 )
-                
+
                 # Log as training data
                 self.telemetry.log_training_example(
                     prompt=f"Create VFD animation: {desc}\n\nUse spatial patterns and full 20x2 display.",
                     response=code,
                     metadata=metrics
                 )
-                
+
                 self.state.save(func_name, desc, 'success')
 
                 if self.progress:
@@ -473,7 +543,7 @@ class Generator:
 
         debug(f"  └─ ✗ All {MAX_RETRIES} attempts failed")
         final_error = " | ".join(all_errors[-3:])
-        
+
         # Log failure telemetry
         self.telemetry.log_generation(
             generation_id=func_name,
@@ -483,12 +553,13 @@ class Generator:
             attempt=MAX_RETRIES,
             error=final_error
         )
-        
+
         self.state.save(func_name, desc, 'failure', final_error)
         if self.progress:
             self.progress.set_progress(self.gen_count * 1.0)
 
     def _generate_one_single_shot(self):
+        """Generate single animation for single-shot mode"""
         desc = generate_idea()
         func_name = f"anim_{int(time.time())}_{random.randint(1000,9999)}"
         code_file = self.output_dir / f"{func_name}.py"
@@ -516,7 +587,7 @@ class Generator:
                 debug(f"  ├─ ✗ Syntax validation failed: {syntax_error}")
                 all_errors.append(f"Syntax: {syntax_error}")
                 continue
-            
+
             debug(f"  ├─ ✓ Syntax valid")
 
             try:
@@ -538,7 +609,7 @@ class Generator:
 
                 animation = Animation(func_name, desc, code, namespace[func_name])
                 self.queue.put(animation)
-                
+
                 # Log telemetry
                 metrics = analyze_code(code, func_name)
                 self.telemetry.log_generation(
@@ -549,14 +620,14 @@ class Generator:
                     attempt=attempt,
                     **metrics
                 )
-                
+
                 # Log as training data
                 self.telemetry.log_training_example(
                     prompt=f"Create VFD animation: {desc}\n\nUse spatial patterns and full 20x2 display.",
                     response=code,
                     metadata=metrics
                 )
-                
+
                 self.state.save(func_name, desc, 'success')
 
                 if self.progress:
@@ -571,7 +642,7 @@ class Generator:
 
         debug(f"  └─ ✗ All {MAX_RETRIES} attempts failed")
         final_error = " | ".join(all_errors[-3:])
-        
+
         # Log failure telemetry
         self.telemetry.log_generation(
             generation_id=func_name,
@@ -581,15 +652,18 @@ class Generator:
             attempt=MAX_RETRIES,
             error=final_error
         )
-        
+
         self.state.save(func_name, desc, 'failure', final_error)
         if self.progress:
             self.progress.set_progress(MAX_RETRIES)
 
+
 class DisplayController:
-    def __init__(self, animation_queue: queue.Queue, state: State):
+    """Controls VFD display and animation playback"""
+    def __init__(self, animation_queue: queue.Queue, state: State, keyboard: KeyboardListener = None):
         self.queue = animation_queue
         self.state = state
+        self.keyboard = keyboard
         self.display = None
         self.animator = None
         self.running = False
@@ -604,11 +678,11 @@ class DisplayController:
             else:
                 self.display = CD5220(VFD_DEVICE, baudrate=VFD_BAUDRATE, debug=False)
                 ok(f"Display connected: {VFD_DEVICE}")
-            
+
             hardware_animator = DiffAnimator(self.display, frame_rate=FRAME_RATE, render_console=False)
             self.animator = DualAnimator(hardware_animator, PREVIEW_MODE)
             self.animator.clear_display()
-            
+
             if PREVIEW_MODE:
                 ok("Console output enabled")
         except Exception as e:
@@ -616,13 +690,14 @@ class DisplayController:
             raise
 
     def show_loading(self, progress_tracker: ProgressTracker):
+        """Show loading bar during initial generation"""
         try:
             self.loading_active = True
             last_percent = -1
-            
+
             while self.loading_active:
                 current, target = progress_tracker.get_progress()
-                
+
                 if current >= target:
                     line1 = "LOADING 100%".center(20)
                     line2 = "[==========]".center(20)
@@ -643,13 +718,14 @@ class DisplayController:
                     last_percent = percent_int
 
                 time.sleep(0.1)
-            
+
         except Exception as e:
             debug(f"Loading error: {e}")
         finally:
             self.loading_active = False
 
     def run(self):
+        """Continuous mode playback"""
         self.running = True
 
         while self.running:
@@ -667,6 +743,11 @@ class DisplayController:
 
                 try:
                     animation.run(self.animator, ANIMATION_DURATION)
+                    
+                    # ★ CHECK FOR BOOKMARK
+                    if self.keyboard and self.keyboard.check_and_clear():
+                        self.bookmark_animation(animation)
+                        
                 except Exception as e:
                     err(f"Playback error: {e}")
                 finally:
@@ -680,17 +761,23 @@ class DisplayController:
                 time.sleep(1)
 
     def run_single(self, animation: Animation):
+        """Single-shot mode - loop one animation forever"""
         self.running = True
         info(f"▶ Looping: {animation.desc}")
-        
+
         loop_count = 0
         while self.running:
             try:
                 loop_count += 1
                 if loop_count % 10 == 0:
                     info(f"▶ Loop #{loop_count}: {animation.desc}")
-                
+
                 animation.run(self.animator, ANIMATION_DURATION)
+
+                # ★ CHECK FOR BOOKMARK
+                if self.keyboard and self.keyboard.check_and_clear():
+                    self.bookmark_animation(animation)
+
                 self.animator.clear_display()
                 time.sleep(0.2)
             except KeyboardInterrupt:
@@ -701,6 +788,7 @@ class DisplayController:
                 time.sleep(1)
 
     def _show_placeholder(self):
+        """Show waiting message when queue is empty"""
         try:
             for i in range(60):
                 if not self.queue.empty():
@@ -721,33 +809,31 @@ class DisplayController:
                 pass
 
     def bookmark_animation(self, animation):
-        """Log bookmark event directly to telemetry file"""
+        """Log bookmark event to telemetry"""
         try:
-            import time, json
-            from pathlib import Path
-            
             telemetry_dir = Path('generated_animations/telemetry')
             telemetry_dir.mkdir(parents=True, exist_ok=True)
             events_file = telemetry_dir / 'events.jsonl'
-            
+
             bookmark_event = {
-                'timestamp': time.time(),
+                'timestamp': datetime.now().isoformat(),
                 'message': 'bookmark',
                 'generation_id': animation.func_name,
                 'idea': animation.desc,
                 'bookmarked': True,
                 'bookmark_time': time.time()
             }
-            
+
             with open(events_file, 'a') as f:
                 f.write(json.dumps(bookmark_event) + '\n')
-            
-            print(f"\n\033[0;32m✓\033[0m Bookmarked: {animation.desc[:50]}...\n", file=sys.stderr, flush=True)
+
+            ok(f"★ Bookmarked: {animation.desc[:40]}")
         except Exception as e:
-            print(f"\n\033[0;31m✗\033[0m Bookmark failed: {e}\n", file=sys.stderr, flush=True)
+            err(f"Bookmark failed: {e}")
 
 
 def init_check():
+    """Validate system requirements before starting"""
     header("Initialization")
 
     try:
@@ -788,19 +874,20 @@ def init_check():
     else:
         info(f"Config: {ANIMATION_DURATION}s animations, queue size {QUEUE_SIZE}")
 
+
 def main():
     global VERBOSE, ANIMATION_DURATION, PREVIEW_MODE, FRAME_RATE, CUSTOM_IDEA
 
-    parser = argparse.ArgumentParser(description='VFD Animation Agent v4.12')
+    parser = argparse.ArgumentParser(description='VFD Animation Agent v4.14')
     parser.add_argument('-d', '--duration', type=float, help='Animation duration in seconds')
     parser.add_argument('-f', '--fps', type=int, help='Frame rate in Hz')
     parser.add_argument('-p', '--prompt', type=str, default=DEFAULT_PROMPT_FILE, help='Prompt file path')
     parser.add_argument('--idea', type=str, help='Custom animation idea (single-shot mode)')
     parser.add_argument('--preview', action='store_true', help='Show console output')
     parser.add_argument('-v', '--verbose', action='store_true', help='Verbose logging')
-    parser.add_argument('--replay', nargs='?', const='generated_animations', 
+    parser.add_argument('--replay', nargs='?', const='generated_animations',
                         help='Replay existing animations from folder (default: generated_animations)')
-    parser.add_argument('--version', action='version', version='VFD Agent v4.12')
+    parser.add_argument('--version', action='version', version='VFD Agent v4.14')
 
     args = parser.parse_args()
 
@@ -822,32 +909,35 @@ def main():
 
     init_check()
 
-    # Replay mode: loop through existing animations
+    # ★ REPLAY MODE - FIXED TO SUPPORT BOOKMARKING
     if args.replay:
         header("Replay Mode")
         replay_dir = Path(args.replay)
-        
+
         if not replay_dir.exists():
             err(f"Replay directory not found: {replay_dir}")
             sys.exit(1)
-        
+
         # Find all animation files
         anim_files = sorted(replay_dir.glob('anim_*.py'))
-        
+
         if not anim_files:
             err(f"No animation files found in {replay_dir}")
             sys.exit(1)
-        
+
         info(f"Found {len(anim_files)} animations to replay")
         if PREVIEW_MODE:
             info("Console output enabled")
-        info("Press Ctrl+C to stop")
-        
-        display = DisplayController(queue.Queue(), state)
-        
+        info("Press 'b' to bookmark, Ctrl+C to stop")
+
+        # ★ INITIALIZE KEYBOARD LISTENER
+        keyboard = KeyboardListener()
+        display = DisplayController(queue.Queue(), state, keyboard)
+
         try:
+            keyboard.start()  # ★ START LISTENER
             display.start()
-            
+
             # Load all animations
             animations = []
             for anim_file in anim_files:
@@ -856,7 +946,7 @@ def main():
                     with open(anim_file) as f:
                         code = f.read()
                     exec(code, namespace)
-                    
+
                     # Extract function name from filename
                     func_name = anim_file.stem
                     if func_name in namespace:
@@ -865,28 +955,33 @@ def main():
                         animations.append(anim)
                 except Exception as e:
                     warn(f"Skipping {anim_file.name}: {e}")
-            
+
             if not animations:
                 err("No valid animations loaded")
                 sys.exit(1)
-            
+
             ok(f"Loaded {len(animations)} animations")
-            
+
             # Play animations in loop
             play_count = 0
             while True:
                 for animation in animations:
                     play_count += 1
                     info(f"▶ #{play_count}: {animation.desc}")
-                    
+
                     try:
                         animation.run(display.animator, ANIMATION_DURATION)
+                        
+                        # ★ CHECK FOR BOOKMARK IN REPLAY MODE
+                        if keyboard.check_and_clear():
+                            display.bookmark_animation(animation)
+                            
                     except Exception as e:
                         err(f"Playback error: {e}")
                     finally:
                         display.animator.clear_display()
                         time.sleep(0.2)
-                        
+
         except KeyboardInterrupt:
             info("\nStopping...")
         except Exception as e:
@@ -894,25 +989,31 @@ def main():
             import traceback
             traceback.print_exc()
         finally:
+            keyboard.stop()  # ★ STOP LISTENER
             display.stop()
             info("Stopped")
-        
+
         sys.exit(0)
 
+    # ★ SINGLE-SHOT MODE WITH KEYBOARD LISTENER
     if CUSTOM_IDEA:
         header("Single-Shot Mode")
         info("Generating ONE animation, will loop forever")
         if PREVIEW_MODE:
             info("Console output enabled")
-        info("Press Ctrl+C to stop")
-        
+        info("Press 'b' to bookmark, Ctrl+C to stop")
+
         progress = ProgressTracker(MAX_RETRIES)
         generator = Generator(animation_queue, state, output_dir, prompt, progress)
-        display = DisplayController(animation_queue, state)
         
+        # ★ INITIALIZE KEYBOARD LISTENER
+        keyboard = KeyboardListener()
+        display = DisplayController(animation_queue, state, keyboard)
+
         try:
+            keyboard.start()  # ★ START LISTENER
             display.start()
-            
+
             info("Generating animation...")
             loading_thread = threading.Thread(
                 target=display.show_loading,
@@ -920,22 +1021,22 @@ def main():
                 daemon=True
             )
             loading_thread.start()
-            
+
             generator._generate_one_single_shot()
-            
+
             display.loading_active = False
             loading_thread.join(timeout=0.5)
-            
+
             if animation_queue.qsize() < 1:
                 err("Generation failed after max retries")
                 err(f"Check generated_animations/failed_*.txt for details")
                 sys.exit(1)
-            
+
             animation = animation_queue.get()
             ok(f"Generated: {animation.desc}")
-            
+
             display.run_single(animation)
-            
+
         except KeyboardInterrupt:
             info("\nStopping...")
         except Exception as e:
@@ -943,33 +1044,39 @@ def main():
             import traceback
             traceback.print_exc()
         finally:
+            keyboard.stop()  # ★ STOP LISTENER
             display.stop()
             info("Stopped")
-    
+
+    # ★ CONTINUOUS MODE WITH KEYBOARD LISTENER
     else:
         header("Continuous Generation Mode")
         info("Display will NEVER be blank")
         info("Animations generate in background")
         if PREVIEW_MODE:
             info("Console output enabled")
-        info("Press Ctrl+C to stop")
+        info("Press 'b' to bookmark, Ctrl+C to stop")
 
         progress = ProgressTracker(QUEUE_SIZE)
         generator = Generator(animation_queue, state, output_dir, prompt, progress)
-        display = DisplayController(animation_queue, state)
+        
+        # ★ INITIALIZE KEYBOARD LISTENER
+        keyboard = KeyboardListener()
+        display = DisplayController(animation_queue, state, keyboard)
 
         try:
+            keyboard.start()  # ★ START LISTENER
             display.start()
-            
+
             info("Pre-generating initial animations...")
-            
+
             loading_thread = threading.Thread(
                 target=display.show_loading,
                 args=(progress,),
                 daemon=True
             )
             loading_thread.start()
-            
+
             generator.start()
 
             wait_start = time.time()
@@ -981,11 +1088,11 @@ def main():
 
             display.loading_active = False
             loading_thread.join(timeout=0.5)
-            
+
             ok(f"Queue filled ({animation_queue.qsize()} ready)")
 
             display.run()
-            
+
         except KeyboardInterrupt:
             info("\nStopping gracefully...")
         except Exception as e:
@@ -994,11 +1101,13 @@ def main():
             traceback.print_exc()
         finally:
             try:
+                keyboard.stop()  # ★ STOP LISTENER
                 generator.stop()
                 display.stop()
                 info("Stopped")
             except KeyboardInterrupt:
                 sys.exit(0)
+
 
 if __name__ == '__main__':
     main()
