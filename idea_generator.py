@@ -20,19 +20,19 @@ except ImportError:
 
 class IdeaGenerator:
     """Constructs phrases from explicitly-tagged word file"""
-    
+
     def __init__(self, word_file: Path = Path('idea.txt')):
         self.word_file = word_file
         self.vocabulary = {'verbs': [], 'nouns': [], 'adjectives': []}
         self._load_vocabulary()
-    
+
     def _load_vocabulary(self):
         """Load words from file with explicit POS tags (word:pos format)"""
         if not self.word_file.exists():
             print(f"ERROR: {self.word_file} not found")
             print("Create idea.txt with format: word:pos (pos = v/n/a)")
             exit(1)
-        
+
         words_loaded = 0
         skipped = 0
         with open(self.word_file) as f:
@@ -40,21 +40,21 @@ class IdeaGenerator:
                 line = line.strip()
                 if not line or line.startswith('#'):
                     continue
-                
+
                 # Parse word:pos format
                 if ':' not in line:
                     skipped += 1
                     continue
-                
+
                 parts = line.split(':', 1)
                 if len(parts) != 2:
                     skipped += 1
                     continue
-                
+
                 word, pos_tag = parts
                 word = word.strip()
                 pos_tag = pos_tag.strip().lower()
-                
+
                 # Map to categories
                 if pos_tag == 'v':
                     self.vocabulary['verbs'].append(word)
@@ -67,20 +67,20 @@ class IdeaGenerator:
                     words_loaded += 1
                 else:
                     skipped += 1
-        
+
         # Remove duplicates
         for pos in self.vocabulary:
             self.vocabulary[pos] = list(set(self.vocabulary[pos]))
-        
+
         # Report stats
         if skipped > 0:
             print(f"WARNING: Skipped {skipped} lines (missing or invalid :pos tags)")
-        
+
         print(f"Loaded {words_loaded} words: "
               f"{len(self.vocabulary['verbs'])} verbs, "
               f"{len(self.vocabulary['nouns'])} nouns, "
               f"{len(self.vocabulary['adjectives'])} adjectives")
-        
+
         # Validate minimum words
         if len(self.vocabulary['verbs']) < 5:
             print(f"ERROR: Only {len(self.vocabulary['verbs'])} verbs found (need 5+)")
@@ -88,7 +88,7 @@ class IdeaGenerator:
         if len(self.vocabulary['nouns']) < 5:
             print(f"ERROR: Only {len(self.vocabulary['nouns'])} nouns found (need 5+)")
             exit(1)
-    
+
     def generate(self, min_words: int = 2, max_words: int = 4) -> str:
         """
         Generate phrase with constraints.
@@ -102,11 +102,11 @@ class IdeaGenerator:
         """
         target_length = random.randint(min_words, max_words)
         components = []
-        
+
         # Decide structure randomly
         has_verb = random.random() < 0.8  # 80% chance of verb
         num_adjectives = random.choices([0, 1, 2], weights=[0.3, 0.5, 0.2])[0]
-        
+
         # Add adjectives
         if self.vocabulary['adjectives']:
             for _ in range(min(num_adjectives, len(self.vocabulary['adjectives']))):
@@ -114,7 +114,7 @@ class IdeaGenerator:
                     adj = random.choice(self.vocabulary['adjectives'])
                     if adj not in components:
                         components.append(adj)
-        
+
         # Add verb (as present participle using inflect)
         if has_verb and self.vocabulary['verbs'] and len(components) < target_length - 1:
             verb = random.choice(self.vocabulary['verbs'])
@@ -124,20 +124,20 @@ class IdeaGenerator:
             else:
                 # Fallback if inflect fails
                 components.append(verb + 'ing')
-        
+
         # Add noun(s) to reach target length
         while len(components) < target_length and self.vocabulary['nouns']:
             noun = random.choice(self.vocabulary['nouns'])
             if noun not in components:
                 components.append(noun)
-        
+
         # Ensure at least one noun exists
         if not components or not any(word in self.vocabulary['nouns'] for word in components):
             if self.vocabulary['nouns']:
                 components.append(random.choice(self.vocabulary['nouns']))
-        
+
         return ' '.join(components)
-    
+
     def list_vocabulary(self):
         """Print current vocabulary for debugging"""
         for pos, words in self.vocabulary.items():
@@ -164,7 +164,7 @@ def generate_idea() -> str:
 # CLI test mode
 if __name__ == '__main__':
     import sys
-    
+
     if len(sys.argv) > 1 and sys.argv[1] == 'list':
         get_generator().list_vocabulary()
     else:

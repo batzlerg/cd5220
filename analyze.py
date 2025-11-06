@@ -236,12 +236,12 @@ def downvotes():  # ★ NEW
     result = downvotes_df[display_cols].sort_values('datetime', ascending=False)
 
     print(f"Total downvotes: {len(downvotes_df)}")
-    
+
     if 'idea' in downvotes_df.columns:
         print(f"\nMost downvoted ideas:")
         idea_counts = downvotes_df.groupby('idea').size().sort_values(ascending=False)
         print(idea_counts.head(10))
-    
+
     print()
     return result
 

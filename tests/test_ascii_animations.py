@@ -500,5 +500,3 @@ def test_wander_validation(monkeypatch, caplog):
                            enable_simulator=True),
               duration=0.25, quantity=5, wander=-0.5)
     assert "Wander -0.5 is below minimum" in caplog.text
-
-
