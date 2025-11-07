@@ -83,8 +83,8 @@ class KeyboardListener:
         self.thread = None
         self.old_settings = None
 
-    """Start listening for key presses in background thread"""
     def start(self):
+        """Start listening for key presses in background thread"""
         if not sys.stdin.isatty():
             debug("Not a TTY, keyboard listener disabled")
             return
@@ -93,28 +93,28 @@ class KeyboardListener:
         self.thread.start()
         debug("Keyboard listener started")
 
-    """Stop the listener"""
     def stop(self):
+        """Stop the listener"""
         self.running = False
         if self.thread:
             self.thread.join(timeout=0.5)
 
-    """Check if 'b' was pressed and clear the flag"""
     def check_and_clear(self) -> bool:
+        """Check if 'b' was pressed and clear the flag"""
         if self.bookmark_pressed:
             self.bookmark_pressed = False
             return True
         return False
 
-    """Check if 'd' was pressed and clear the flag"""
     def check_and_clear_downvote(self) -> bool:
+        """Check if 'd' was pressed and clear the flag"""
         if self.downvote_pressed:
             self.downvote_pressed = False
             return True
         return False
 
-    """Background thread that polls for 'b' and 'd' keys"""
     def _listen(self):
+        """Background thread that polls for 'b' and 'd' keys"""
         try:
             self.old_settings = termios.tcgetattr(sys.stdin)
             tty.setcbreak(sys.stdin.fileno())
@@ -358,7 +358,29 @@ def validate_runtime(func: Callable, func_name: str) -> Tuple[bool, str, Optiona
         )
 
         capture = FrameCapture(test_animator, animation_id=func_name)
-        func(capture.animator, duration=1.0)
+
+        # Run with timeout to prevent infinite loops
+        result = {'done': False, 'error': None}
+
+        def run_with_capture():
+            try:
+                func(capture.animator, duration=1.0)
+                result['done'] = True
+            except Exception as e:
+                result['error'] = e
+
+        timeout_thread = threading.Thread(target=run_with_capture, daemon=True)
+        timeout_thread.start()
+        # Static 2s timeout: validation runs with frame_sleep disabled
+        # Legitimate animations complete in <1s, hung animations never complete
+        timeout_thread.join(timeout=2.0)
+
+        if not result['done']:
+            return False, "Timeout: animation hung (>2s for 1s test)", None
+
+        if result['error']:
+            raise result['error']
+
         elapsed = time.time() - start_time
 
         stats = capture.get_stats()
@@ -404,14 +426,14 @@ class Generator:
         self.thread = None
         self.gen_count = 0
 
-    """Start listening for key presses in background thread"""
     def start(self):
+        """Start background generation thread"""
         self.running = True
         self.thread = threading.Thread(target=self._generate_loop, daemon=True)
         self.thread.start()
 
-    """Stop the listener"""
     def stop(self):
+        """Stop the generator thread"""
         self.running = False
         if self.thread:
             try:
@@ -679,8 +701,8 @@ class DisplayController:
         self.play_count = 0
         self.loading_active = False
 
-    """Start listening for key presses in background thread"""
     def start(self):
+        """Initialize display hardware and animator"""
         try:
             if VFD_DEVICE == "simulator":
                 self.display = CD5220.create_simulator_only(debug=False, render_console=False)
@@ -842,8 +864,8 @@ class DisplayController:
         except:
             pass
 
-    """Stop the listener"""
     def stop(self):
+        """Stop display and cleanup"""
         self.running = False
         if self.animator:
             try:
