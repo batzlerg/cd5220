@@ -2,7 +2,7 @@
 """
 VFD Animation Agent - AI-Driven VFD Art Display
 Production-ready continuous animation generation with telemetry
-Version: 4.16.0 - Added frame capture system
+Version: 4.18.0 - Simplified runtime-only validation
 """
 
 import sys
@@ -14,7 +14,6 @@ import argparse
 import threading
 import queue
 import logging
-import re
 import termios
 import tty
 import select
@@ -27,13 +26,13 @@ from cd5220 import CD5220, DiffAnimator
 from telemetry_lite import VFDTelemetry
 from code_metrics import analyze_code
 from idea_generator import generate_idea
-from frame_capture import FrameCapture, validate_frame_content  # ★ NEW IMPORT
+from frame_capture import FrameCapture
 
 # Configuration
 VFD_DEVICE = os.getenv('VFD_DEVICE', '/dev/ttyUSB0')
 VFD_BAUDRATE = 9600
 OLLAMA_API_BASE = os.getenv('OLLAMA_API_BASE', 'http://localhost:11434')
-MODEL = os.getenv('OLLAMA_MODEL', 'qwen2.5-coder:14b')
+MODEL = os.getenv('OLLAMA_MODEL', 'qwen2.5-coder:3b')
 ANIMATION_DURATION = float(os.getenv('ANIMATION_DURATION', '10.0'))
 FRAME_RATE = 6
 MAX_RETRIES = 5
@@ -84,8 +83,8 @@ class KeyboardListener:
         self.thread = None
         self.old_settings = None
 
+    """Start listening for key presses in background thread"""
     def start(self):
-        """Start listening for key presses in background thread"""
         if not sys.stdin.isatty():
             debug("Not a TTY, keyboard listener disabled")
             return
@@ -94,28 +93,28 @@ class KeyboardListener:
         self.thread.start()
         debug("Keyboard listener started")
 
+    """Stop the listener"""
     def stop(self):
-        """Stop the listener"""
         self.running = False
         if self.thread:
             self.thread.join(timeout=0.5)
 
+    """Check if 'b' was pressed and clear the flag"""
     def check_and_clear(self) -> bool:
-        """Check if 'b' was pressed and clear the flag"""
         if self.bookmark_pressed:
             self.bookmark_pressed = False
             return True
         return False
 
+    """Check if 'd' was pressed and clear the flag"""
     def check_and_clear_downvote(self) -> bool:
-        """Check if 'd' was pressed and clear the flag"""
         if self.downvote_pressed:
             self.downvote_pressed = False
             return True
         return False
 
+    """Background thread that polls for 'b' and 'd' keys"""
     def _listen(self):
-        """Background thread that polls for 'b' and 'd' keys"""
         try:
             self.old_settings = termios.tcgetattr(sys.stdin)
             tty.setcbreak(sys.stdin.fileno())
@@ -218,7 +217,6 @@ class DualAnimator:
         self.preview_enabled = preview_enabled
         self.frame_rate = hardware_animator.frame_rate
 
-        # ★ NEW: Frame capture support
         self.frame_capture: Optional[FrameCapture] = None
         if capture_frames:
             self.frame_capture = FrameCapture(hardware_animator, animation_id="playback")
@@ -237,53 +235,18 @@ class DualAnimator:
     def clear_display(self):
         self.hardware.clear_display()
 
-    # ★ NEW: Access captured frames
     def get_frame_capture(self) -> Optional[FrameCapture]:
         return self.frame_capture
 
 
-def validate_dual_row_usage(code: str) -> Tuple[bool, str]:
-    has_line1 = 'line1' in code
-    has_line2 = 'line2' in code
-    if not (has_line1 and has_line2):
-        return False, "Missing line1 or line2"
-    return True, ""
-
-
-def validate_width_usage(code: str) -> Tuple[bool, str]:
-    patterns = [r'range\(20\)', r' 20']
-    for p in patterns:
-        if re.search(p, code):
-            return True, ""
-    if 'x in' in code.lower():
-        return True, ""
-    return False, "No full-width usage"
-
-
-def validate_motion(code: str) -> Tuple[bool, str]:
-    indicators = ['frame', 'velocity', 'vel', 'position', 'move', 'offset']
-    for ind in indicators:
-        if ind in code.lower():
-            return True, ""
-    return False, "No motion logic"
-
-
-def validate_character_variety(code: str) -> Tuple[bool, str]:
-    chars = set()
-    for match in re.finditer(r"['\"](.*?)['\"]", code):
-        chars.update(c for c in match.group(1) if c not in ' ')
-    if len(chars) >= 4:
-        return True, ""
-    return False, f"Only {len(chars)} chars (need 4+)"
-
-
 def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
-    """Extract and validate function code from LLM response"""
+    """Extract function code from LLM response - no aesthetic validation"""
     code = raw_code.replace("``````", "").replace(chr(96)*3, "").strip()
 
     lines = code.split('\n')
     func_start = -1
 
+    # Find function definition
     for i, line in enumerate(lines):
         if line.strip().startswith(f"def {func_name}"):
             func_start = i
@@ -300,24 +263,12 @@ def clean_code(raw_code: str, func_name: str) -> Tuple[Optional[str], str]:
 
     func_code = '\n'.join(lines[func_start:])
 
+    # ONLY validate required API usage - no aesthetic checks
     if 'write_frame' not in func_code:
         return None, "Missing write_frame"
-    if 'frame_sleep' not in func_code:
-        return None, "Missing frame_sleep"
-    if len(func_code) < 150:
-        return None, f"Code too short"
-
-    valid, error = validate_dual_row_usage(func_code)
-    if not valid:
-        return None, f"Row: {error}"
-
-    valid, error = validate_motion(func_code)
-    if not valid:
-        return None, f"Motion: {error}"
-
-    valid, error = validate_character_variety(func_code)
-    if not valid:
-        return None, f"Chars: {error}"
+    
+    if len(func_code) < 50:
+        return None, f"Code too short ({len(func_code)} chars)"
 
     full_code = f"from cd5220 import DiffAnimator\nimport random\nimport math\n\n{func_code}"
     return full_code, ""
@@ -347,7 +298,7 @@ def generate_code(prompt: str, desc: str, func_name: str, attempt: int,
         "options": {
             "temperature": max(0.6, 0.85 - (attempt * 0.05)),
             "num_predict": 2048,
-            "stop": ["```\n"]
+            "num_ctx": 8192
         }
     }
 
@@ -390,7 +341,8 @@ def validate_syntax(code: str) -> Tuple[bool, str]:
 
 def validate_runtime(func: Callable, func_name: str) -> Tuple[bool, str, Optional[FrameCapture]]:
     """
-    Validate runtime behavior with fast test execution and frame capture.
+    Runtime validation: Only check if animation runs without crashing.
+    Captures frames for post-analysis but does NOT reject based on aesthetic criteria.
     
     Returns:
         Tuple of (valid, error_message, frame_capture)
@@ -405,33 +357,20 @@ def validate_runtime(func: Callable, func_name: str) -> Tuple[bool, str, Optiona
             render_console=False
         )
 
-        # ★ NEW: Wrap with frame capture
         capture = FrameCapture(test_animator, animation_id=func_name)
-
-        # Run animation
         func(capture.animator, duration=1.0)
-
         elapsed = time.time() - start_time
 
-        # ★ NEW: Validate frame content
         stats = capture.get_stats()
-        valid, content_error = validate_frame_content(
-            capture.get_frames(),
-            empty_threshold=0.7,
-            dual_row_threshold=0.2
-        )
-
-        if not valid:
-            debug(f"  ├─ ✗ Frame validation failed: {content_error}")
-            return False, content_error, None
-
-        debug(f"  ├─ ✓ Runtime validation passed ({stats['total_frames']} frames, {stats['non_empty_frames']} non-empty, {elapsed:.2f}s)")
+        debug(f"  ├─ ✓ Runtime OK ({stats['total_frames']} frames, {elapsed:.2f}s)")
+        
+        # Return success with capture - no aesthetic validation
         return True, "", capture
 
     except IndexError as e:
         return False, f"IndexError: {str(e)[:100]}", None
     except Exception as e:
-        return False, f"Runtime: {str(e)[:100]}", None
+        return False, f"Runtime crash: {str(e)[:100]}", None
 
 
 class Animation:
@@ -465,11 +404,13 @@ class Generator:
         self.thread = None
         self.gen_count = 0
 
+    """Start listening for key presses in background thread"""
     def start(self):
         self.running = True
         self.thread = threading.Thread(target=self._generate_loop, daemon=True)
         self.thread.start()
 
+    """Stop the listener"""
     def stop(self):
         self.running = False
         if self.thread:
@@ -544,16 +485,17 @@ class Generator:
 
                 debug(f"  ├─ ✓ Compiled successfully")
 
-                # ★ MODIFIED: Runtime validation now returns frame capture
-                valid_runtime, runtime_error, frame_capture = validate_runtime(namespace[func_name], func_name)
+                valid_runtime, runtime_error, frame_capture = validate_runtime(
+                    namespace[func_name], func_name
+                )
                 if not valid_runtime:
                     debug(f"  ├─ ✗ Runtime validation failed: {runtime_error}")
                     all_errors.append(f"Runtime: {runtime_error}")
                     continue
 
-                # ★ NEW: Save captured frames
                 if frame_capture:
                     captures_dir = self.output_dir / "frame_captures"
+                    captures_dir.mkdir(exist_ok=True)
                     capture_file = captures_dir / f"{func_name}.jsonl"
                     frame_capture.save_jsonl(capture_file, metadata={
                         'idea': desc,
@@ -657,16 +599,17 @@ class Generator:
 
                 debug(f"  ├─ ✓ Compiled successfully")
 
-                # ★ MODIFIED: Runtime validation now returns frame capture
-                valid_runtime, runtime_error, frame_capture = validate_runtime(namespace[func_name], func_name)
+                valid_runtime, runtime_error, frame_capture = validate_runtime(
+                    namespace[func_name], func_name
+                )
                 if not valid_runtime:
                     debug(f"  ├─ ✗ Runtime validation failed: {runtime_error}")
                     all_errors.append(f"Runtime: {runtime_error}")
                     continue
 
-                # ★ NEW: Save captured frames
                 if frame_capture:
                     captures_dir = self.output_dir / "frame_captures"
+                    captures_dir.mkdir(exist_ok=True)
                     capture_file = captures_dir / f"{func_name}.jsonl"
                     frame_capture.save_jsonl(capture_file, metadata={
                         'idea': desc,
@@ -736,6 +679,7 @@ class DisplayController:
         self.play_count = 0
         self.loading_active = False
 
+    """Start listening for key presses in background thread"""
     def start(self):
         try:
             if VFD_DEVICE == "simulator":
@@ -746,8 +690,6 @@ class DisplayController:
                 ok(f"Display connected: {VFD_DEVICE}")
 
             hardware_animator = DiffAnimator(self.display, frame_rate=FRAME_RATE, render_console=False)
-
-            # ★ MODIFIED: Enable frame capture if preview or simulator mode
             capture_enabled = PREVIEW_MODE or (VFD_DEVICE == "simulator")
             self.animator = DualAnimator(hardware_animator, PREVIEW_MODE, capture_frames=capture_enabled)
             self.animator.clear_display()
@@ -820,10 +762,10 @@ class DisplayController:
                     if self.keyboard and self.keyboard.check_and_clear_downvote():
                         self.downvote_animation(animation)
 
-                    # ★ NEW: Save playback frame capture if enabled
                     frame_cap = self.animator.get_frame_capture()
                     if frame_cap and len(frame_cap.get_frames()) > 0:
                         captures_dir = Path("generated_animations") / "frame_captures"
+                        captures_dir.mkdir(parents=True, exist_ok=True)
                         capture_file = captures_dir / f"{animation.func_name}_playback.jsonl"
                         frame_cap.save_jsonl(capture_file, metadata={
                             'idea': animation.desc,
@@ -865,10 +807,10 @@ class DisplayController:
                 if self.keyboard and self.keyboard.check_and_clear_downvote():
                     self.downvote_animation(animation)
 
-                # ★ NEW: Save playback frame capture if enabled
                 frame_cap = self.animator.get_frame_capture()
                 if frame_cap and len(frame_cap.get_frames()) > 0 and loop_count == 1:
                     captures_dir = Path("generated_animations") / "frame_captures"
+                    captures_dir.mkdir(parents=True, exist_ok=True)
                     capture_file = captures_dir / f"{animation.func_name}_playback.jsonl"
                     frame_cap.save_jsonl(capture_file, metadata={
                         'idea': animation.desc,
@@ -900,6 +842,7 @@ class DisplayController:
         except:
             pass
 
+    """Stop the listener"""
     def stop(self):
         self.running = False
         if self.animator:
@@ -1000,15 +943,15 @@ def init_check():
 def main():
     global VERBOSE, ANIMATION_DURATION, PREVIEW_MODE, FRAME_RATE, CUSTOM_IDEA
 
-    parser = argparse.ArgumentParser(description="VFD Animation Agent v4.16")
+    parser = argparse.ArgumentParser(description="VFD Animation Agent v4.18")
     parser.add_argument('-d', '--duration', type=float, help="Animation duration in seconds")
     parser.add_argument('-f', '--fps', type=int, help="Frame rate in Hz")
     parser.add_argument('-p', '--prompt', type=str, default=DEFAULT_PROMPT_FILE, help="Prompt file path")
     parser.add_argument('--idea', type=str, help="Custom animation idea (single-shot mode)")
     parser.add_argument('--preview', action='store_true', help="Show console output")
     parser.add_argument('-v', '--verbose', action='store_true', help="Verbose logging")
-    parser.add_argument('--replay', nargs='?', const='generated_animations', help="Replay existing animations from folder (default: generated_animations)")
-    parser.add_argument('--version', action='version', version='VFD Agent v4.16')
+    parser.add_argument('--replay', nargs='?', const='generated_animations', help="Replay existing animations")
+    parser.add_argument('--version', action='version', version='VFD Agent v4.18')
 
     args = parser.parse_args()
 
@@ -1043,10 +986,8 @@ def main():
             sys.exit(1)
 
         info(f"Found {len(anim_files)} animations to replay")
-
         if PREVIEW_MODE:
             info("Console output enabled")
-
         info("Press 'b' to bookmark, 'd' to downvote, Ctrl+C to stop")
 
         keyboard = KeyboardListener()
@@ -1092,10 +1033,10 @@ def main():
                         if keyboard.check_and_clear_downvote():
                             display.downvote_animation(animation)
 
-                        # ★ NEW: Save replay frame capture if enabled
                         frame_cap = display.animator.get_frame_capture()
                         if frame_cap and len(frame_cap.get_frames()) > 0:
                             captures_dir = Path("generated_animations") / "frame_captures"
+                            captures_dir.mkdir(parents=True, exist_ok=True)
                             capture_file = captures_dir / f"{animation.func_name}_replay.jsonl"
                             frame_cap.save_jsonl(capture_file, metadata={
                                 'replay': True,
