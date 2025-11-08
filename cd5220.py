@@ -56,35 +56,35 @@ class CD5220DisplayError(Exception):
 class CD5220:
     """
     CD5220 VFD Display Controller with Smart Mode Management
-    
+
     Key Features:
     - Smart mode transitions with configurable auto-clear behavior
     - String mode for fast line writing (ESC Q A/B)
     - Continuous marquee scrolling (ESC Q D, upper line only)
     - Window-constrained viewport mode (ESC W + ESC DC3)
     - Hardware-aware timing and error handling
-    
+
     Basic Usage:
         with CD5220('/dev/ttyUSB0') as display:
             display.write_both_lines("Hello", "World")
             display.scroll_marquee("Scrolling text...")
-    
+
     Hardware Compatibility:
-        Most VFD displays work with zero delays (default). If your hardware 
+        Most VFD displays work with zero delays (default). If your hardware
         experiences dropped commands or mode transition failures, try:
-        
+
         # Slow hardware compatibility
-        display = CD5220('/dev/ttyUSB0', 
+        display = CD5220('/dev/ttyUSB0',
                         base_command_delay=0.01,      # 10ms between commands
                         mode_transition_delay=0.05)   # 50ms for mode changes
-        
+
         # Per-command delay override
         display.set_brightness(3, delay=0.1)  # Force 100ms delay
-    
+
     Mode Management:
     - NORMAL: Full cursor/ESC command support (default)
     - STRING: Fast line writing, limited to CLR/CAN commands
-    - SCROLL: Continuous scrolling, limited to CLR/CAN commands  
+    - SCROLL: Continuous scrolling, limited to CLR/CAN commands
     - VIEWPORT: Window-constrained display, limited to CLR/CAN commands
     """
 
@@ -146,7 +146,7 @@ class CD5220:
                  console_verbose: bool = False):
         """
         Initialize CD5220 controller.
-        
+
         Args:
             serial_port: Serial port device, existing Serial object, or ``None`` for simulator-only mode
             baudrate: Communication baud rate (default 9600)
@@ -237,7 +237,7 @@ class CD5220:
     def _send_command(self, command: bytes, description: str = "Command", delay: float = None) -> None:
         """
         Send command with optional delay override.
-        
+
         Args:
             command: Command bytes to send
             description: Debug description
@@ -575,7 +575,7 @@ class CD5220:
     def set_brightness(self, level: int, delay: float = None) -> None:
         """
         Set display brightness (normal mode only).
-        
+
         Args:
             level: Brightness level 1-4 (1=dimmest, 4=brightest)
             delay: Optional delay override (for slow hardware)
@@ -600,7 +600,7 @@ class CD5220:
     def set_cursor_position(self, col: int, row: int, delay: float = None) -> None:
         """
         Set cursor position (normal mode only).
-        
+
         Args:
             col: Column 1-20
             row: Row 1-2
@@ -649,6 +649,30 @@ class CD5220:
         self.set_cursor_position(col, row, delay)
         self.write_at_cursor(text, delay)
 
+    def write_positioned_batch(self, text: str, start_col: int, row: int) -> None:
+        """Write multiple contiguous characters starting at position.
+
+        Args:
+            text: String to write (will be truncated to fit display)
+            start_col: Starting column (1-based, 1-20)
+            row: Row number (1-based, 1-2)
+        """
+        if not (1 <= row <= 2):
+            raise ValueError(f"Row must be 1 or 2, got {row}")
+        if not (1 <= start_col <= 20):
+            raise ValueError(f"Column must be 1-20, got {start_col}")
+
+        # Truncate text to fit within display bounds
+        max_length = 20 - start_col + 1
+        text = text[:max_length]
+
+        if not text:
+            return
+
+        # Set cursor position ONCE, then write all characters
+        self.set_cursor_position(start_col, row)
+        self.write_at_cursor(text)
+
     def display_on(self, delay: float = None) -> None:
         """Turn display on (normal mode only)."""
         self._ensure_normal_mode("Display control")
@@ -664,10 +688,10 @@ class CD5220:
     def write_upper_line(self, text: str, delay: float = None) -> None:
         """
         Write to upper line using fast string mode (ESC Q A).
-        
-        Enters STRING mode - only clear_display() or cancel_current_line() 
+
+        Enters STRING mode - only clear_display() or cancel_current_line()
         will restore NORMAL mode functionality.
-        
+
         Args:
             text: Text to display (truncated to 20 chars if longer)
             delay: Optional delay override (for slow hardware)
@@ -683,7 +707,7 @@ class CD5220:
     def write_lower_line(self, text: str, delay: float = None) -> None:
         """
         Write to lower line using fast string mode (ESC Q B).
-        
+
         Args:
             text: Text to display (truncated to 20 chars if longer)
             delay: Optional delay override (for slow hardware)
@@ -699,7 +723,7 @@ class CD5220:
     def write_both_lines(self, upper: str, lower: str, delay: float = None) -> None:
         """
         Write to both lines using string mode.
-        
+
         Args:
             upper: Text for upper line
             lower: Text for lower line
@@ -713,9 +737,9 @@ class CD5220:
     def scroll_marquee(self, text: str, observe_duration: float = None, delay: float = None) -> None:
         """
         Start continuous marquee scrolling on upper line (ESC Q D).
-        
+
         Hardware limitation: Upper line only.
-        
+
         Args:
             text: Text to scroll
             observe_duration: Recommended viewing time
@@ -736,7 +760,7 @@ class CD5220:
     def set_window(self, line: int, start_col: int, end_col: int, delay: float = None) -> None:
         """
         Set window range for viewport mode (normal mode only).
-        
+
         Uses consistent 1-based indexing. Window boundaries match writing positions.
 
         Args:
@@ -782,9 +806,9 @@ class CD5220:
     def enter_viewport_mode(self, delay: float = None) -> None:
         """
         Enter viewport mode for window-constrained display.
-        
+
         Requires windows to be set first using set_window().
-        
+
         Args:
             delay: Optional delay override (for slow hardware)
         """
@@ -810,7 +834,7 @@ class CD5220:
     ) -> None:
         """
         Write text to viewport window with optional smooth character building.
-        
+
         Args:
             line: Line number (1 or 2)
             text: Text to write
@@ -859,7 +883,7 @@ class CD5220:
     def display_message(self, message: str, duration: float = 2.0, mode: str = "string", delay: float = None) -> None:
         """
         Display a message with automatic line wrapping.
-        
+
         Args:
             message: Message to display
             duration: How long to show the message
@@ -1060,6 +1084,7 @@ class DiffAnimator:
         self.frame_sleep_fn = frame_sleep_fn
         self.buffer: List[List[str]] = [list(" " * 20), list(" " * 20)]
         self.state: List[List[str]] = [list(" " * 20), list(" " * 20)]
+        self.prevlines: List[str] = []
         self._render_console_enabled = render_console
         enable_simulator = enable_simulator or render_console
         self.simulator: Optional[DisplaySimulator] = DisplaySimulator() if enable_simulator else None
@@ -1080,6 +1105,7 @@ class DiffAnimator:
 
     def reset_tracking(self) -> None:
         self.state = [list(" " * 20), list(" " * 20)]
+        self.prevlines = []
         self.frame_buffer = self.buffer
 
     def set_char(self, x: int, y: int, char: str) -> None:
@@ -1100,12 +1126,65 @@ class DiffAnimator:
             self._render_console()
 
     def write_frame(self, line1: str, line2: str) -> None:
-        lines = [line1.ljust(20), line2.ljust(20)]
-        for y in range(2):
-            for x in range(20):
-                self.buffer[y][x] = lines[y][x]
-        self.frame_buffer = self.buffer
-        self.render_frame()
+        """Write a frame with batched character-level diffing.
+
+        Batches contiguous character changes into single write operations.
+        This helps performance by reducing the number of bytes over the wire vs char-by-char approach.
+
+        Args:
+            line1: Upper line content (will be truncated/padded to 20 chars)
+            line2: Lower line content (will be truncated/padded to 20 chars)
+        """
+        line1 = line1[:20].ljust(20)
+        line2 = line2[:20].ljust(20)
+
+        lines = [line1, line2]
+
+        for row_idx, new_line in enumerate(lines):
+            # Get previous line for comparison (or spaces if first frame)
+            old_line = self.prevlines[row_idx] if self.prevlines else ' ' * 20
+
+            col = 0
+            while col < 20:
+                new_char = new_line[col]
+                old_char = old_line[col]
+
+                if new_char != old_char:
+                    # Found a change - collect contiguous run
+                    run_start = col
+                    changed_chars = []
+
+                    while col < 20 and new_line[col] != old_line[col]:
+                        changed_chars.append(new_line[col])
+
+                        # Update internal buffer if it exists
+                        if hasattr(self, 'buffer'):
+                            self.buffer[row_idx][col] = new_line[col]
+
+                        col += 1
+
+                    # Write entire run at once (THE OPTIMIZATION!)
+                    run_text = ''.join(changed_chars)
+                    self.display.write_positioned_batch(run_text, run_start + 1, row_idx + 1)
+
+                    # Update simulator if enabled
+                    if self.simulator:
+                        for i, ch in enumerate(run_text):
+                            self.simulator.set_char(run_start + i + 1, row_idx + 1, ch)
+                else:
+                    col += 1
+
+        # Update state for next frame
+        self.prevlines = [line1, line2]
+
+        # Update internal state tracking
+        for row_idx in range(2):
+            for col in range(20):
+                self.state[row_idx][col] = lines[row_idx][col]
+
+        # Console rendering (if enabled)
+        if self._render_console_enabled:
+            self._render_console()
 
     def clear_display(self) -> None:
         self.display.clear_display()
