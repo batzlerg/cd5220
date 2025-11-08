@@ -87,7 +87,7 @@ class CD5220:
     - SCROLL: Continuous scrolling, limited to CLR/CAN commands  
     - VIEWPORT: Window-constrained display, limited to CLR/CAN commands
     """
-    
+
     DISPLAY_WIDTH = 20
     DISPLAY_HEIGHT = 2
 
@@ -95,12 +95,12 @@ class CD5220:
     # SCROLL_REFRESH_RATE doesn't set anything, it's determined by hardware.
     # This value is just for calculating dependent timing elsewhere.
     SCROLL_REFRESH_RATE = 1.0  # Hz
-    
+
     # Core control commands
     CMD_CLEAR = b'\x0C'
     CMD_CANCEL = b'\x18'
     CMD_INITIALIZE = b'\x1B\x40'
-    
+
     # Normal mode commands
     CMD_OVERWRITE_MODE = b'\x1B\x11'
     CMD_VERTICAL_SCROLL = b'\x1B\x12'
@@ -116,17 +116,17 @@ class CD5220:
     CMD_BRIGHTNESS = b'\x1B\x2A'
     CMD_DISPLAY_ON = b'\x1B\x3D'
     CMD_DISPLAY_OFF = b'\x1B\x3C'
-    
+
     # String mode commands
     CMD_STRING_UPPER = b'\x1B\x51\x41'
     CMD_STRING_LOWER = b'\x1B\x51\x42'
-    
+
     # Scroll mode commands
     CMD_SCROLL_MARQUEE = b'\x1B\x51\x44'
-    
+
     # Window management commands
     CMD_WINDOW_SET = b'\x1B\x57'
-    
+
     # Font and display control
     CMD_INTERNATIONAL_FONT = b'\x1B\x66'
     CMD_EXTENDED_FONT = b'\x1B\x63'
@@ -168,7 +168,7 @@ class CD5220:
         self.base_command_delay = base_command_delay
         self.mode_transition_delay = mode_transition_delay
         self.initialization_delay = initialization_delay
-        self.render_console = render_console
+        self._render_console_enabled = render_console
         self.console_verbose = console_verbose
         self.simulator: Optional[DisplaySimulator] = DisplaySimulator() if enable_simulator or render_console else None
         self._first_console_render = True
@@ -181,11 +181,11 @@ class CD5220:
         # Simulator cursor position tracking (1-based)
         self._sim_x = 1
         self._sim_y = 1
-        
+
         if debug:
             logger.setLevel(logging.DEBUG)
             logger.debug("Initializing CD5220 controller")
-        
+
         try:
             if hardware_enabled and serial_port is not None:
                 if isinstance(serial_port, str):
@@ -258,7 +258,7 @@ class CD5220:
                 before = self.simulator.get_display()
                 self._parse_and_apply_command(command)
                 after = self.simulator.get_display()
-                if self.render_console:
+                if self._render_console_enabled:
                     changed = before != after
                     self._render_console_state(description, changed)
 
@@ -500,7 +500,7 @@ class CD5220:
         """Ensure display is in normal mode for operations that require it."""
         if self._current_mode == DisplayMode.NORMAL:
             return False
-        
+
         if self.auto_clear_mode_transitions or force_clear:
             if self.warn_on_mode_transitions:
                 logger.warning(f"{operation} requires normal mode. Auto-clearing from {self._current_mode.value} mode.")
@@ -522,7 +522,7 @@ class CD5220:
         self._send_command(text.encode('ascii', 'ignore'), f"Raw write: '{text}'", delay)
 
     # === MODE CONTROL ===
-    
+
     def clear_display(self, delay: float = None) -> None:
         """Clear display and return to normal mode."""
         self._send_command(self.CMD_CLEAR, "Clear display", delay)
@@ -549,11 +549,11 @@ class CD5220:
         """Restore factory defaults: brightness 4, overwrite mode, cursor off."""
         self.clear_display(delay)
         self.set_brightness(4, delay)
-        self.set_overwrite_mode(delay) 
+        self.set_overwrite_mode(delay)
         self.cursor_off(delay)
 
     # === NORMAL MODE METHODS ===
-    
+
     def set_overwrite_mode(self, delay: float = None) -> None:
         """Set overwrite mode (normal mode only)."""
         self._ensure_normal_mode("Overwrite mode")
@@ -582,7 +582,7 @@ class CD5220:
         """
         if not 1 <= level <= 4:
             raise CD5220DisplayError(f"Invalid brightness level: {level} (must be 1-4)")
-        
+
         self._ensure_normal_mode("Brightness control")
         cmd = self.CMD_BRIGHTNESS + bytes([level])
         self._send_command(cmd, f"Set brightness: {level}", delay)
@@ -610,7 +610,7 @@ class CD5220:
             raise CD5220DisplayError("Row must be 1 or 2")
         if not 1 <= col <= self.DISPLAY_WIDTH:
             raise CD5220DisplayError(f"Column must be 1-{self.DISPLAY_WIDTH}")
-        
+
         self._ensure_normal_mode("Cursor positioning")
         self._send_cursor_position_raw(col, row, delay)
 
@@ -660,7 +660,7 @@ class CD5220:
         self._send_command(self.CMD_DISPLAY_OFF, "Display off", delay)
 
     # === STRING MODE METHODS ===
-    
+
     def write_upper_line(self, text: str, delay: float = None) -> None:
         """
         Write to upper line using fast string mode (ESC Q A).
@@ -709,7 +709,7 @@ class CD5220:
         self.write_lower_line(lower, delay)
 
     # === CONTINUOUS SCROLLING METHODS ===
-    
+
     def scroll_marquee(self, text: str, observe_duration: float = None, delay: float = None) -> None:
         """
         Start continuous marquee scrolling on upper line (ESC Q D).
@@ -725,14 +725,14 @@ class CD5220:
         self._send_command(cmd, f"Scroll marquee: '{text}'", delay)
         self._current_mode = DisplayMode.SCROLL
         self._sync_simulator_mode()
-        
+
         if observe_duration is None:
             observe_duration = max(8.0, len(text) / self.SCROLL_REFRESH_RATE * 0.5)
-        
+
         logger.info(f"Marquee scrolling for {observe_duration:.1f}s at ~{self.SCROLL_REFRESH_RATE}Hz")
 
     # === WINDOW MANAGEMENT METHODS ===
-    
+
     def set_window(self, line: int, start_col: int, end_col: int, delay: float = None) -> None:
         """
         Set window range for viewport mode (normal mode only).
@@ -749,13 +749,13 @@ class CD5220:
             raise CD5220DisplayError("Line must be 1 or 2")
         if not 1 <= start_col <= end_col <= self.DISPLAY_WIDTH:
             raise CD5220DisplayError(f"Invalid window range: start={start_col}, end={end_col}")
-        
+
         self._ensure_normal_mode("Window management")
-        
+
         # Convert from 1-based API coordinates to 0-based hardware coordinates
         hw_start_col = start_col - 1
         hw_end_col = end_col - 1
-        
+
         cmd = self.CMD_WINDOW_SET + bytes([1, hw_start_col, hw_end_col, line])
         self._send_command(
             cmd,
@@ -790,12 +790,12 @@ class CD5220:
         """
         if self._active_window is None:
             raise CD5220DisplayError("No windows configured. Use set_window() first.")
-        
+
         self._ensure_normal_mode("Viewport mode entry")
         self.set_horizontal_scroll_mode(delay)
         self._current_mode = DisplayMode.VIEWPORT
         self._sync_simulator_mode()
-        
+
         logger.info(
             f"Entered viewport mode with window: line {self._active_window[0]},"
             f" cols {self._active_window[1]}-{self._active_window[2]}"
@@ -820,12 +820,12 @@ class CD5220:
         """
         if self._current_mode != DisplayMode.VIEWPORT:
             raise CD5220DisplayError("Must be in viewport mode. Use enter_viewport_mode() first.")
-        
+
         if not self._active_window or self._active_window[0] != line:
             raise CD5220DisplayError(f"No window configured for line {line}")
 
         start_col, end_col = self._active_window[1], self._active_window[2]
-        
+
         if char_delay is None:
             # Fast mode: write entire text at once (original behavior)
             self._send_cursor_position_raw(start_col, line, delay)
@@ -841,7 +841,7 @@ class CD5220:
                 time.sleep(char_delay)
 
     # === FONT CONTROL ===
-    
+
     def set_international_font(self, font_id: int, delay: float = None) -> None:
         """Set international font (normal mode only)."""
         self._ensure_normal_mode("Font selection")
@@ -855,7 +855,7 @@ class CD5220:
         self._send_command(cmd, f"Set extended font: {font_id}", delay)
 
     # === CONVENIENCE METHODS ===
-    
+
     def display_message(self, message: str, duration: float = 2.0, mode: str = "string", delay: float = None) -> None:
         """
         Display a message with automatic line wrapping.
@@ -867,7 +867,7 @@ class CD5220:
             delay: Optional delay override (for slow hardware)
         """
         lines = [message[i:i+self.DISPLAY_WIDTH] for i in range(0, len(message), self.DISPLAY_WIDTH)]
-        
+
         if mode == "string":
             if len(lines) >= 1:
                 self.write_upper_line(lines[0], delay)
@@ -879,7 +879,7 @@ class CD5220:
                 self.write_positioned(lines[0], 1, 1, delay)
             if len(lines) >= 2:
                 self.write_positioned(lines[1], 1, 2, delay)
-        
+
         time.sleep(duration)
 
     def close(self) -> None:  # pragma: no cover - hardware cleanup
@@ -1060,7 +1060,7 @@ class DiffAnimator:
         self.frame_sleep_fn = frame_sleep_fn
         self.buffer: List[List[str]] = [list(" " * 20), list(" " * 20)]
         self.state: List[List[str]] = [list(" " * 20), list(" " * 20)]
-        self.render_console = render_console
+        self._render_console_enabled = render_console
         enable_simulator = enable_simulator or render_console
         self.simulator: Optional[DisplaySimulator] = DisplaySimulator() if enable_simulator else None
         self._first_console_render = True
@@ -1096,7 +1096,7 @@ class DiffAnimator:
                     if self.simulator:
                         # DisplaySimulator expects 1-based positions
                         self.simulator.set_char(x + 1, y + 1, ch)
-        if self.render_console:
+        if self._render_console_enabled:
             self._render_console()
 
     def write_frame(self, line1: str, line2: str) -> None:
@@ -1113,7 +1113,7 @@ class DiffAnimator:
         self.reset_tracking()
         if self.simulator:
             self.simulator.clear()
-        if self.render_console:
+        if self._render_console_enabled:
             self._first_console_render = True
 
     def get_simulator(self) -> Optional[DisplaySimulator]:
@@ -1131,7 +1131,12 @@ class DiffAnimator:
         if not self.simulator:
             self.simulator = DisplaySimulator()
             self.reset_tracking()
-        self.render_console = True
+        self._render_console_enabled = True
+
+    @property
+    def render_console(self) -> bool:
+        """Return True if console rendering is enabled."""
+        return self._render_console_enabled
 
     def _render_console(self) -> None:
         """Render the simulator state to the terminal in-place."""
