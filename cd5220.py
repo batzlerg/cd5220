@@ -1066,6 +1066,7 @@ class DiffAnimator:
         frame_sleep_fn: callable = time.sleep,
         enable_simulator: bool = False,
         render_console: bool = False,
+        skip_unchanged_frames: bool = True
     ) -> None:
         """Create a new animator.
 
@@ -1082,6 +1083,7 @@ class DiffAnimator:
         self.frame_rate = frame_rate
         self.sleep_fn = sleep_fn
         self.frame_sleep_fn = frame_sleep_fn
+        self.skip_unchanged_frames = skip_unchanged_frames
         self.buffer: List[List[str]] = [list(" " * 20), list(" " * 20)]
         self.state: List[List[str]] = [list(" " * 20), list(" " * 20)]
         self.prevlines: List[str] = []
@@ -1138,6 +1140,11 @@ class DiffAnimator:
         line1 = line1[:20].ljust(20)
         line2 = line2[:20].ljust(20)
 
+
+        # OPTIMIZATION: Skip if frame is identical to previous
+        if self.skip_unchanged_frames and self.prevlines:
+            if line1 == self.prevlines[0] and line2 == self.prevlines[1]:
+                return  # Early exit - no changes detected
         lines = [line1, line2]
 
         for row_idx, new_line in enumerate(lines):
